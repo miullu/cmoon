@@ -1,0 +1,41 @@
+name: zmoon
+description: "A new Flutter project."
+publish_to: 'none' # Remove this line if you wish to publish to pub.dev
+version: 1.0.0+1
+environment:
+  sdk: ^3.10.4
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  file_picker: ^10.3.8 
+  archive: ^4.0.7
+  xml: ^6.5.0 
+  sqflite: ^2.3.0
+  path: ^1.8.3
+  flutter_widget_from_html: 0.17.1
+  path_provider: ^2.1.2
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_launcher_icons: ^0.14.4
+  flutter_lints: ^6.0.0
+flutter:
+  uses-material-design: true
+flutter_launcher_icons:
+  android: "launcher_icon"
+  ios: false
+  image_path: "icon.png"
+  min_sdk_android: 21 # android min sdk min:16, default 21
+  web:
+    generate: true
+    image_path: "icon.png"
+    background_color: "#hexcode"
+    theme_color: "#hexcode"
+  windows:
+    generate: true
+    image_path: "icon.png"
+    icon_size: 48 # min:48, max:256, default: 48
+  macos:
+    generate: true
+    image_path: "icon.png"
