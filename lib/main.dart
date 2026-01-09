@@ -38,7 +38,7 @@ class ReaderScreen extends StatefulWidget {
 class _ReaderScreenState extends State<ReaderScreen> {
   final Loader _loader = Loader();
   late EpubReader _reader;
-  
+
   bool _isLoaded = false;
   int _currentChapterIndex = 0;
   String _chapterHtml = "";
@@ -60,10 +60,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
       if (result != null && result.files.single.bytes != null) {
         final bytes = result.files.single.bytes!;
-        
+
         // 1. Load the bytes into our memory-optimized loader
         _loader.loadFromBytes(bytes);
-        
+
         // 2. Initialize the EPUB structure
         _reader.init();
 
@@ -71,7 +71,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
         setState(() {
           _isLoaded = true;
           _currentChapterIndex = 0;
-          _bookTitle = _reader.getMetadata()['title'] ?? result.files.single.name;
+          _bookTitle =
+              _reader.getMetadata()['title'] ?? result.files.single.name;
           _loadChapter(0);
         });
       }
@@ -87,6 +88,29 @@ class _ReaderScreenState extends State<ReaderScreen> {
     });
     // Close drawer if open
     if (Navigator.canPop(context)) Navigator.pop(context);
+  }
+
+  void _navigateToHref(String? href) {
+    if (href == null) return;
+
+    // EPUB hrefs often include anchors (e.g., chapter1.xhtml#section1)
+    // We need the base filename to match our manifest
+    final baseHref = href.split('#').first;
+
+    // Find the index in the spine that matches this href
+    int targetIndex = -1;
+    for (int i = 0; i < _reader.chapterCount; i++) {
+      // This assumes your EpubReader can expose the href for a specific index
+      // Let's add a helper for this or check the manifest
+      if (_reader.getChapterHref(i) == baseHref) {
+        targetIndex = i;
+        break;
+      }
+    }
+
+    if (targetIndex != -1) {
+      _loadChapter(targetIndex);
+    }
   }
 
   void _showError(String message) {
@@ -110,9 +134,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       ),
       // Only show the drawer if a book is loaded
       drawer: _isLoaded ? _buildChapterDrawer() : null,
-      body: _isLoaded 
-          ? _buildReaderView() 
-          : _buildEmptyState(),
+      body: _isLoaded ? _buildReaderView() : _buildEmptyState(),
       bottomNavigationBar: _isLoaded ? _buildNavigation() : null,
     );
   }
@@ -159,27 +181,47 @@ class _ReaderScreenState extends State<ReaderScreen> {
                 _bookTitle,
                 style: const TextStyle(color: Colors.white, fontSize: 18),
                 textAlign: TextAlign.center,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
               ),
             ),
           ),
           Expanded(
-            child: ListView.builder(
-              itemCount: _reader.chapterCount,
-              itemBuilder: (context, index) {
-                return ListTile(
-                  leading: CircleAvatar(child: Text("${index + 1}")),
-                  title: Text("Chapter ${index + 1}"),
-                  selected: _currentChapterIndex == index,
-                  onTap: () => _loadChapter(index),
-                );
-              },
+            child: ListView(
+              // We call a helper to build the list from the TOC tree
+              children: _buildTocTiles(_reader.toc),
             ),
           ),
         ],
       ),
     );
+  }
+
+  List<Widget> _buildTocTiles(List<TocNode> nodes, {int depth = 0}) {
+    List<Widget> tiles = [];
+    for (var node in nodes) {
+      tiles.add(
+        ListTile(
+          // Add indentation for nested chapters
+          contentPadding: EdgeInsets.only(
+            left: 16.0 + (depth * 20.0),
+            right: 16.0,
+          ),
+          title: Text(
+            node.title,
+            style: TextStyle(
+              fontWeight: depth == 0 ? FontWeight.bold : FontWeight.normal,
+            ),
+          ),
+          onTap: () {
+            _navigateToHref(node.href);
+          },
+        ),
+      );
+      // Recursively add children
+      if (node.children.isNotEmpty) {
+        tiles.addAll(_buildTocTiles(node.children, depth: depth + 1));
+      }
+    }
+    return tiles;
   }
 
   Widget _buildNavigation() {
@@ -189,15 +231,15 @@ class _ReaderScreenState extends State<ReaderScreen> {
         children: [
           IconButton(
             icon: const Icon(Icons.arrow_back),
-            onPressed: _currentChapterIndex > 0 
-                ? () => _loadChapter(_currentChapterIndex - 1) 
+            onPressed: _currentChapterIndex > 0
+                ? () => _loadChapter(_currentChapterIndex - 1)
                 : null,
           ),
           Text("Page ${_currentChapterIndex + 1} of ${_reader.chapterCount}"),
           IconButton(
             icon: const Icon(Icons.arrow_forward),
-            onPressed: _currentChapterIndex < _reader.chapterCount - 1 
-                ? () => _loadChapter(_currentChapterIndex + 1) 
+            onPressed: _currentChapterIndex < _reader.chapterCount - 1
+                ? () => _loadChapter(_currentChapterIndex + 1)
                 : null,
           ),
         ],
@@ -224,7 +266,7 @@ class _EpubWidgetFactory extends WidgetFactory {
         // For now, we call super to maintain default behavior or fallback
         return super.buildImage(tree, data);
       }
-      return super.buildImage(tree, data); 
+      return super.buildImage(tree, data);
     } catch (e) {
       return const Icon(Icons.broken_image);
     }

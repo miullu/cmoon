@@ -11,10 +11,10 @@ class Loader {
     if (bytes.isEmpty) {
       throw Exception("Invalid file: empty");
     }
-    
+
     // Fix: Use decodeBytes instead of decodeBuffer to resolve the 4.0.7 compilation error
     _archive = ZipDecoder().decodeBytes(bytes);
-    
+
     _index.clear();
     for (final file in _archive!.files) {
       // Store reference using lowercase key for robust searching
@@ -28,10 +28,10 @@ class Loader {
   /// Extracts and returns the bytes of a specific file
   Uint8List getFile(String path) {
     if (_archive == null) throw Exception("Loader not initialized");
-    
+
     // Normalize path: handle backslashes and casing
     final normalizedPath = path.replaceAll('\\', '/').toLowerCase();
-    
+
     final file = _index[normalizedPath];
     if (file == null) {
       throw Exception("File not found in archive: $path");
