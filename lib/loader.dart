@@ -6,15 +6,14 @@ class Loader {
   // Use a case-insensitive index to prevent crashes on mismatched casing
   final Map<String, ArchiveFile> _index = {};
 
-  /// Load EPUB/ZIP using a buffer to avoid extracting everything into memory at once
+  /// Load EPUB/ZIP using standard decoding
   void loadFromBytes(Uint8List bytes) {
     if (bytes.isEmpty) {
       throw Exception("Invalid file: empty");
     }
     
-    // decodeBuffer is more memory efficient than decodeBytes
-    final input = InputStream(bytes);
-    _archive = ZipDecoder().decodeBuffer(input);
+    // Fix: Use decodeBytes instead of decodeBuffer to resolve the 4.0.7 compilation error
+    _archive = ZipDecoder().decodeBytes(bytes);
     
     _index.clear();
     for (final file in _archive!.files) {
@@ -38,7 +37,7 @@ class Loader {
       throw Exception("File not found in archive: $path");
     }
 
-    // Only now are the bytes for this specific file decompressed
+    // Ensure the content is returned specifically as Uint8List
     return file.content as Uint8List;
   }
 }

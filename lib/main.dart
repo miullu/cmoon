@@ -1,6 +1,3 @@
-//main.dart
-//this is just a test ui for testing epub.dart and loader.dart
-
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
@@ -217,13 +214,17 @@ class _EpubWidgetFactory extends WidgetFactory {
   _EpubWidgetFactory(this.reader, this.chapterIndex);
 
   @override
-  Widget? buildImage(BuildMetadata meta, ImageSource src) {
+  Widget? buildImage(BuildTree tree, ImageMetadata data) {
     try {
-      // Resolve the image path relative to the current chapter
-      // Note: You might need to adjust based on how your epub.dart provides paths
-      final chapterHref = reader.getChapterHtml(chapterIndex); // simplified for example
-      // Use the reader.getImage logic here if needed
-      return super.buildImage(meta, src); 
+      // In version 0.17.x+, the signature changed from ImageSource to ImageMetadata.
+      // We check if the image source is a relative path to extract it from the EPUB loader.
+      final src = data.sources.firstOrNull;
+      if (src != null && !src.url.startsWith('http')) {
+        // Logic for extracting local EPUB image bytes would go here
+        // For now, we call super to maintain default behavior or fallback
+        return super.buildImage(tree, data);
+      }
+      return super.buildImage(tree, data); 
     } catch (e) {
       return const Icon(Icons.broken_image);
     }
