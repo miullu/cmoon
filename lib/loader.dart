@@ -1,3 +1,4 @@
+// loader.dart
 import 'dart:typed_data';
 import 'package:archive/archive.dart';
 
@@ -22,18 +23,11 @@ class Loader {
 
   /// Load EPUB/ZIP from raw bytes
   void loadFromBytes(Uint8List bytes) {
+    if (bytes.isEmpty) {
+      throw Exception("Invalid file: empty");
+    }
     _rawBytes = bytes;
-    _validate();
     _buildIndex();
-  }
-
-  void _validate() {
-    if (_rawBytes == null || _rawBytes!.length < 4) {
-      throw Exception("Invalid file: empty or too small");
-    }
-    if (!(_rawBytes![0] == 0x50 && _rawBytes![1] == 0x4B)) {
-      throw Exception("File is not a valid ZIP/EPUB");
-    }
   }
 
   void _buildIndex() {
@@ -56,9 +50,10 @@ class Loader {
       (f) => f.name == name,
       orElse: () => throw Exception("File not found: $name"),
     );
-    return file.content is Uint8List
-        ? file.content as Uint8List
-        : Uint8List.fromList(file.content as List<int>);
+    final content = file.content;
+    if (content is Uint8List) return content;
+    if (content is List<int>) return Uint8List.fromList(content);
+    throw Exception("Unsupported content type for: $name");
   }
 
   void dispose() {
