@@ -1,64 +1,44 @@
-// loader.dart
 import 'dart:typed_data';
 import 'package:archive/archive.dart';
 
-class ArchiveEntry {
-  final String name;
-  final int compressedSize;
-  final int uncompressedSize;
-  final bool isCompressed;
-
-  ArchiveEntry({
-    required this.name,
-    required this.compressedSize,
-    required this.uncompressedSize,
-    required this.isCompressed,
-  });
-}
-
 class Loader {
-  Uint8List? _rawBytes;
   Archive? _archive;
-  final Map<String, ArchiveEntry> _index = {};
+  // Use a case-insensitive index to prevent crashes on mismatched casing
+  final Map<String, ArchiveFile> _index = {};
 
-  /// Load EPUB/ZIP from raw bytes
+  /// Load EPUB/ZIP using a buffer to avoid extracting everything into memory at once
   void loadFromBytes(Uint8List bytes) {
     if (bytes.isEmpty) {
       throw Exception("Invalid file: empty");
     }
-    _rawBytes = bytes;
-    _buildIndex();
-  }
-
-  void _buildIndex() {
-    _archive = ZipDecoder().decodeBytes(_rawBytes!);
+    
+    // decodeBuffer is more memory efficient than decodeBytes
+    final input = InputStream(bytes);
+    _archive = ZipDecoder().decodeBuffer(input);
+    
+    _index.clear();
     for (final file in _archive!.files) {
-      _index[file.name] = ArchiveEntry(
-        name: file.name,
-        compressedSize: file.compressedSize,
-        uncompressedSize: file.size,
-        isCompressed: file.isCompressed,
-      );
+      // Store reference using lowercase key for robust searching
+      _index[file.name.toLowerCase()] = file;
     }
   }
 
-  Uint8List get rawBytes => _rawBytes!;
-  List<ArchiveEntry> listFiles() => _index.values.toList();
+  /// Lists all files in the archive (for debugging/listing)
+  List<String> listFiles() => _index.keys.toList();
 
-  Uint8List getFile(String name) {
-    final file = _archive!.files.firstWhere(
-      (f) => f.name == name,
-      orElse: () => throw Exception("File not found: $name"),
-    );
-    final content = file.content;
-    if (content is Uint8List) return content;
-    if (content is List<int>) return Uint8List.fromList(content);
-    throw Exception("Unsupported content type for: $name");
-  }
+  /// Extracts and returns the bytes of a specific file
+  Uint8List getFile(String path) {
+    if (_archive == null) throw Exception("Loader not initialized");
+    
+    // Normalize path: handle backslashes and casing
+    final normalizedPath = path.replaceAll('\\', '/').toLowerCase();
+    
+    final file = _index[normalizedPath];
+    if (file == null) {
+      throw Exception("File not found in archive: $path");
+    }
 
-  void dispose() {
-    _rawBytes = null;
-    _archive = null;
-    _index.clear();
+    // Only now are the bytes for this specific file decompressed
+    return file.content as Uint8List;
   }
 }
