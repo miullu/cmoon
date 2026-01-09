@@ -112,17 +112,6 @@ Implications
 - No persistent caching: Re-opening the app, reloading a file, or navigating away does not persist extracted content to disk. Every run relies on reloading the EPUB bytes (unless the embedding app adds its own persistence).
 - On-demand extraction: The implementation avoids extracting all files upfront — this reduces upfront CPU cost and avoids creating many temporary files, but it still requires the initial full-file read to memory. After that, individual files are returned when requested.
 
-Recommendations / Mitigations
-- For large EPUBs:
-  - Avoid loading the entire EPUB into memory. Instead, use streaming or a partial-read approach where possible (platform-specific file access or streaming ZIP readers).
-  - Alternatively, write the original bytes to a temporary file and use a ZIP reader that reads entries from disk rather than keeping all contents in memory.
-- For improved UX and memory safety:
-  - Make `EpubReader.init()` asynchronous and perform parsing in an isolate to avoid UI jank.
-  - Implement optional on-disk caching: when loading a file, write frequently accessed assets (large images) to a temp directory and reuse them across navigation.
-  - Implement a least-recently-used (LRU) in-memory cache for decoded chapter HTML or large images to balance speed and memory use.
-- For incremental extraction:
-  - Use a ZIP library or approach that supports reading the central directory to get metadata and then reading individual entries from the underlying file stream on demand (rather than decoding the whole archive to memory).
-
 ## How to use
 1. Add dependencies in `pubspec.yaml`:
    - archive
@@ -132,18 +121,3 @@ Recommendations / Mitigations
 2. Run the app on a device/emulator.
 3. Tap the file icon in the AppBar to select an `.epub` file.
 4. Use the drawer to access the table of contents and the bottom bar to move between spine entries.
-
-## Possible improvements / roadmap
-- Make `EpubReader.init()` asynchronous and run parsing in an isolate to avoid UI jank.
-- Improve namespace-aware XML parsing to handle edge-case EPUBs.
-- Add graceful fallback logic for non-standard OPF layouts.
-- Fully implement image loading in `_EpubWidgetFactory` using `EpubReader.getImage`.
-- Add caching strategies (in-memory but bounded LRU, or optional on-disk cache) to support large EPUBs more gracefully.
-- Add streaming / partial-extraction support to avoid holding the entire EPUB in RAM.
-
-## Contact / Notes
-This README is a developer-oriented summary to speed up maintenance and extension. If you want, I can:
-- produce a minimal API reference generated from the Dart files,
-- implement asynchronous parsing,
-- add a working image loader for embedded EPUB images,
-- or prototype a disk-backed loader that avoids keeping the whole archive in memory.
