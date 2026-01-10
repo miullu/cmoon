@@ -23,170 +23,90 @@ class EpubReader {
   Map<String, String>? _manifestIdToMediaType;
   Map<String, String>? _manifestIdToProperties;
   List<TocNode>? _toc;
-  String? _coverId; // explicit cover id from <meta name="cover" content="...">
+  String? _coverId;
 
   EpubReader(this.loader);
 
   void init() {
-    // 1. Find the OPF file path via container.xml
-    final containerBytes = loader.getFile('META-INF/container.xml');
-    final containerXml = XmlDocument.parse(utf8.decode(containerBytes));
-    final rootfile = containerXml.findAllElements('rootfile').firstOrNull;
-    _opfPath = rootfile?.getAttribute('full-path');
-
-    if (_opfPath == null) throw Exception("Could not find OPF path");
-
-    // 2. Parse the OPF file
-    final opfBytes = loader.getFile(_opfPath!);
-    final opfXml = XmlDocument.parse(utf8.decode(opfBytes));
+    _opfPath = _locateOpfPath();
+    final opfXml = _loadXml(_opfPath!);
     final package = opfXml.findElements('package').first;
 
-    // Parse Metadata
-    _metadata = {};
+    _parseMetadata(package);
+    _parseManifest(package);
+    _parseSpine(package);
+
+    _toc = _parseToc(package);
+  }
+
+  // --- Initialization Helpers ---
+
+  String _locateOpfPath() {
+    final bytes = loader.getFile('META-INF/container.xml');
+    final xml = XmlDocument.parse(utf8.decode(bytes));
+    final path = xml
+        .findAllElements('rootfile')
+        .firstOrNull
+        ?.getAttribute('full-path');
+    if (path == null)
+      throw Exception("Could not find OPF path in container.xml");
+    return path;
+  }
+
+  void _parseMetadata(XmlElement package) {
     final metadataBase = package.findElements('metadata').first;
-    for (var node in metadataBase.children) {
-      if (node is XmlElement) {
-        // Simple metadata mapping (title, creator, etc.)
-        _metadata![node.name.local] = node.innerText;
-      }
-    }
+    _metadata = {
+      for (var node in metadataBase.children.whereType<XmlElement>())
+        node.name.local: node.innerText,
+    };
 
-    // Additionally detect <meta name="cover" content="id"> (EPUB2 cover reference)
-    for (var meta in metadataBase.findElements('meta')) {
-      final nameAttr = meta.getAttribute('name');
-      if (nameAttr != null && nameAttr.toLowerCase() == 'cover') {
-        final content = meta.getAttribute('content');
-        if (content != null && content.isNotEmpty) {
-          _coverId = content;
-          break;
-        }
-      }
-    }
+    _coverId = metadataBase
+        .findElements('meta')
+        .firstWhere(
+          (m) => m.getAttribute('name')?.toLowerCase() == 'cover',
+          orElse: () => XmlElement(XmlName('none')),
+        )
+        .getAttribute('content');
+  }
 
-    // Parse Manifest (ID -> Href mapping) and record media-type/properties
+  void _parseManifest(XmlElement package) {
     _manifestIdToHref = {};
     _manifestIdToMediaType = {};
     _manifestIdToProperties = {};
+
     final manifestBase = package.findElements('manifest').first;
     for (var item in manifestBase.findElements('item')) {
       final id = item.getAttribute('id');
       final href = item.getAttribute('href');
-      final media = item.getAttribute('media-type');
-      final props = item.getAttribute('properties');
       if (id != null && href != null) {
         _manifestIdToHref![id] = Uri.decodeFull(href);
-        if (media != null) _manifestIdToMediaType![id] = media;
-        if (props != null) _manifestIdToProperties![id] = props;
+        _manifestIdToMediaType![id] = item.getAttribute('media-type') ?? '';
+        _manifestIdToProperties![id] = item.getAttribute('properties') ?? '';
       }
     }
+  }
 
-    // Parse Spine (Linear reading order)
-    _spineIds = [];
+  void _parseSpine(XmlElement package) {
     final spineBase = package.findElements('spine').first;
-    for (var item in spineBase.findElements('itemref')) {
-      final idref = item.getAttribute('idref');
-      if (idref != null) _spineIds!.add(idref);
-    }
-
-    // 3. Resolve Table of Contents
-    _toc = _parseToc(package, manifestBase);
+    _spineIds = spineBase
+        .findElements('itemref')
+        .map((e) => e.getAttribute('idref'))
+        .whereType<String>()
+        .toList();
   }
 
-  /// Determines if the book uses EPUB 3 Nav or EPUB 2 NCX and parses accordingly
-  List<TocNode> _parseToc(XmlElement package, XmlElement manifest) {
-    // Try EPUB 3 Nav (XHTML)
-    final navItem = manifest
-        .findElements('item')
-        .firstWhere(
-          (node) => node.getAttribute('properties') == 'nav',
-          orElse: () => XmlElement(XmlName('none')),
-        );
+  // --- Path & File Logic ---
 
-    if (navItem.name.local != 'none') {
-      final navHref = navItem.getAttribute('href')!;
-      final navPath = _resolvePath(_opfPath!, navHref);
-      try {
-        final navXml = XmlDocument.parse(utf8.decode(loader.getFile(navPath)));
-        return _parseNav(navXml);
-      } catch (_) {}
-    }
+  String _getAbsolutePath(String relativeHref) =>
+      _resolvePath(_opfPath!, relativeHref);
 
-    // Fallback to EPUB 2 NCX
-    final spine = package.findElements('spine').first;
-    final tocId = spine.getAttribute('toc');
-    if (tocId != null) {
-      final ncxHref = _manifestIdToHref?[tocId];
-      if (ncxHref != null) {
-        final ncxPath = _resolvePath(_opfPath!, ncxHref);
-        try {
-          final ncxXml = XmlDocument.parse(
-            utf8.decode(loader.getFile(ncxPath)),
-          );
-          return _parseNcx(ncxXml);
-        } catch (_) {}
-      }
-    }
+  XmlDocument _loadXml(String path) =>
+      XmlDocument.parse(utf8.decode(loader.getFile(path)));
 
-    return [];
-  }
-
-  /// Parses EPUB 3 <nav> structures
-  List<TocNode> _parseNav(XmlDocument doc) {
-    final nav = doc.findAllElements('nav').firstOrNull;
-    final list = nav?.findElements('ol').firstOrNull;
-    if (list == null) return [];
-
-    List<TocNode> parseLi(XmlElement li) {
-      final anchor = li.findElements('a').firstOrNull;
-      final subList = li.findElements('ol').firstOrNull;
-
-      return [
-        TocNode(
-          title: anchor?.innerText.trim() ?? "Untitled",
-          href: anchor?.getAttribute('href'),
-          children: subList != null
-              ? subList.findElements('li').expand(parseLi).toList()
-              : [],
-        ),
-      ];
-    }
-
-    return list.findElements('li').expand(parseLi).toList();
-  }
-
-  /// Parses EPUB 2 <navMap> structures
-  List<TocNode> _parseNcx(XmlDocument doc) {
-    final navMap = doc.findAllElements('navMap').firstOrNull;
-    if (navMap == null) return [];
-
-    TocNode parseNavPoint(XmlElement node) {
-      final text = node
-          .findAllElements('navLabel')
-          .firstOrNull
-          ?.innerText
-          .trim();
-      final src = node
-          .findAllElements('content')
-          .firstOrNull
-          ?.getAttribute('src');
-      final children = node
-          .findElements('navPoint')
-          .map(parseNavPoint)
-          .toList();
-
-      return TocNode(title: text ?? "Untitled", href: src, children: children);
-    }
-
-    return navMap.findElements('navPoint').map(parseNavPoint).toList();
-  }
-
-  /// Robustly resolves relative paths (e.g., handling ../../)
+  /// Resolves relative paths like "../../image.png" against a context directory
   String _resolvePath(String contextPath, String relativePath) {
-    final parts = contextPath.split('/');
-    parts.removeLast();
-
-    final relParts = relativePath.split('/');
-    for (var part in relParts) {
+    final parts = contextPath.split('/')..removeLast();
+    for (var part in relativePath.split('/')) {
       if (part == '.') continue;
       if (part == '..') {
         if (parts.isNotEmpty) parts.removeLast();
@@ -197,37 +117,93 @@ class EpubReader {
     return parts.join('/');
   }
 
+  // --- Table of Contents ---
+
+  List<TocNode> _parseToc(XmlElement package) {
+    // 1. Try EPUB 3 <nav>
+    final navId = _manifestIdToProperties?.entries
+        .firstWhere(
+          (e) => e.value.contains('nav'),
+          orElse: () => const MapEntry('', ''),
+        )
+        .key;
+
+    if (navId != null && navId.isNotEmpty) {
+      final href = _manifestIdToHref![navId];
+      if (href != null) {
+        try {
+          return _parseNav(_loadXml(_getAbsolutePath(href)));
+        } catch (_) {}
+      }
+    }
+
+    // 2. Try EPUB 2 NCX
+    final ncxId = package.findElements('spine').first.getAttribute('toc');
+    final ncxHref = _manifestIdToHref?[ncxId];
+    if (ncxHref != null) {
+      try {
+        return _parseNcx(_loadXml(_getAbsolutePath(ncxHref)));
+      } catch (_) {}
+    }
+
+    return [];
+  }
+
+  List<TocNode> _parseNav(XmlDocument doc) {
+    final list = doc
+        .findAllElements('nav')
+        .firstOrNull
+        ?.findElements('ol')
+        .firstOrNull;
+    if (list == null) return [];
+
+    List<TocNode> parseLi(XmlElement li) {
+      final anchor = li.findElements('a').firstOrNull;
+      final subList = li.findElements('ol').firstOrNull;
+      return [
+        TocNode(
+          title: anchor?.innerText.trim() ?? "Untitled",
+          href: anchor?.getAttribute('href'),
+          children: subList?.findElements('li').expand(parseLi).toList() ?? [],
+        ),
+      ];
+    }
+
+    return list.findElements('li').expand(parseLi).toList();
+  }
+
+  List<TocNode> _parseNcx(XmlDocument doc) {
+    TocNode parsePoint(XmlElement node) => TocNode(
+      title:
+          node.findElements('navLabel').firstOrNull?.innerText.trim() ??
+          "Untitled",
+      href: node.findElements('content').firstOrNull?.getAttribute('src'),
+      children: node.findElements('navPoint').map(parsePoint).toList(),
+    );
+
+    return doc
+            .findAllElements('navMap')
+            .firstOrNull
+            ?.findElements('navPoint')
+            .map(parsePoint)
+            .toList() ??
+        [];
+  }
+
+  // --- Public API ---
+
   String getChapterHtml(int index) {
-    if (_spineIds == null || index < 0 || index >= _spineIds!.length) {
-      throw Exception("Invalid chapter index");
-    }
-
-    final id = _spineIds![index];
-    final href = _manifestIdToHref?[id];
-    if (href == null) throw Exception("ID $id not in manifest");
-
-    final fullPath = _resolvePath(_opfPath!, href);
-    try {
-      final bytes = loader.getFile(fullPath);
-      return utf8.decode(bytes);
-    } catch (e) {
-      return "<html><body><p>Error loading chapter: $fullPath</p></body></html>";
-    }
+    final href = getChapterHref(index);
+    if (href == null) throw Exception("Invalid chapter index");
+    return utf8.decode(loader.getFile(_getAbsolutePath(href)));
   }
 
   String getCleanChapterHtml(int index) {
     try {
-      final raw = getChapterHtml(index);
-      final document = html_parser.parse(raw);
+      final document = html_parser.parse(getChapterHtml(index));
       document.getElementsByTagName('title').forEach((e) => e.remove());
-
-      // Previously images were inlined here. We no longer inline; the HTML
-      // renderer will resolve images at runtime via the reader API.
-      // This preserves original src attributes (relative paths).
-
       return document.body?.innerHtml ?? document.outerHtml;
     } catch (_) {
-      // If parsing fails for any reason, fall back to raw HTML
       return getChapterHtml(index);
     }
   }
@@ -235,102 +211,57 @@ class EpubReader {
   String? getChapterHref(int index) {
     if (_spineIds == null || index < 0 || index >= _spineIds!.length)
       return null;
-    final id = _spineIds![index];
-    return _manifestIdToHref?[id];
+    return _manifestIdToHref?[_spineIds![index]];
   }
 
-  Uint8List getImage(String hrefFromHtml, String currentChapterPath) {
-    final fullPath = _resolvePath(currentChapterPath, hrefFromHtml);
-    return loader.getFile(fullPath);
+  Uint8List? getImageBytesForChapter(int chapterIndex, String hrefFromHtml) {
+    final chapterHref = getChapterHref(chapterIndex);
+    if (chapterHref == null) return null;
+
+    final chapterAbsPath = _getAbsolutePath(chapterHref);
+    final imgPath = _resolvePath(chapterAbsPath, hrefFromHtml);
+    return loader.getFile(imgPath);
+  }
+
+  Uint8List? getThumbnailBytes() {
+    if (_manifestIdToHref == null) return null;
+
+    bool isImg(String id) =>
+        _manifestIdToMediaType?[id]?.startsWith('image/') ?? false;
+
+    // Ordered strategies for finding the cover
+    final coverHrefs = [
+      if (_coverId != null) _manifestIdToHref![_coverId],
+      ..._manifestIdToHref!.entries
+          .where(
+            (e) =>
+                _manifestIdToProperties?[e.key]?.contains('cover-image') ??
+                false,
+          )
+          .map((e) => e.value),
+      ..._manifestIdToHref!.entries
+          .where(
+            (e) =>
+                (e.key.contains('cover') || e.value.contains('cover')) &&
+                isImg(e.key),
+          )
+          .map((e) => e.value),
+    ];
+
+    for (final href in coverHrefs) {
+      if (href != null) return loader.getFile(_getAbsolutePath(href));
+    }
+
+    // Ultimate fallback: First image
+    final firstImg = _manifestIdToHref!.entries
+        .firstWhere((e) => isImg(e.key), orElse: () => const MapEntry('', ''))
+        .value;
+    return firstImg.isNotEmpty
+        ? loader.getFile(_getAbsolutePath(firstImg))
+        : null;
   }
 
   Map<String, String> getMetadata() => _metadata ?? {};
-  List<TocNode> get toc => _toc ?? [];
   int get chapterCount => _spineIds?.length ?? 0;
-
-  /// Public helper: returns the resolved (OPF-based) full path for a chapter.
-  /// Example: "OPS/chapter1.xhtml"
-  String? getChapterFullPath(int index) {
-    final href = getChapterHref(index);
-    if (href == null || _opfPath == null) return null;
-    return _resolvePath(_opfPath!, href);
-  }
-
-  /// Public helper: return image bytes for an image referenced from HTML
-  /// inside [chapterIndex]. It resolves the relative path against the chapter
-  /// full path and returns null if not found or on error.
-  Uint8List? getImageBytesForChapter(int chapterIndex, String hrefFromHtml) {
-    try {
-      final chapterFull = getChapterFullPath(chapterIndex);
-      if (chapterFull == null) return null;
-      final imgPath = _resolvePath(chapterFull, hrefFromHtml);
-      return loader.getFile(imgPath);
-    } catch (_) {
-      return null;
-    }
-  }
-
-  /// Attempts to extract a thumbnail/cover image from the EPUB.
-  /// Strategy (in order):
-  /// 1. If <meta name="cover" content="cover-id"> exists in OPF metadata, use that manifest item.
-  /// 2. Prefer manifest items with properties containing "cover-image".
-  /// 3. Look for manifest items whose id or href includes "cover" and have image media-type.
-  /// 4. Fallback to the first item in the manifest with an image media-type.
-  /// Returns null if none found or on error.
-  Uint8List? getThumbnailBytes() {
-    try {
-      if (_manifestIdToHref == null) return null;
-
-      // 1) explicit cover meta
-      if (_coverId != null) {
-        final href = _manifestIdToHref![_coverId!];
-        if (href != null) {
-          final path = _resolvePath(_opfPath!, href);
-          return loader.getFile(path);
-        }
-      }
-
-      // Helper to test if manifest id matches image
-      bool isImageId(String id) {
-        final media = _manifestIdToMediaType?[id];
-        if (media != null && media.toLowerCase().startsWith('image/'))
-          return true;
-        return false;
-      }
-
-      // 2) manifest items with properties containing "cover-image"
-      for (var entry in _manifestIdToHref!.entries) {
-        final id = entry.key;
-        final props = _manifestIdToProperties?[id]?.toLowerCase() ?? '';
-        if (props.contains('cover-image') && isImageId(id)) {
-          final path = _resolvePath(_opfPath!, entry.value);
-          return loader.getFile(path);
-        }
-      }
-
-      // 3) look for id/href heuristics (id or href contains 'cover')
-      for (var entry in _manifestIdToHref!.entries) {
-        final id = entry.key;
-        final href = entry.value.toLowerCase();
-        if ((id.toLowerCase().contains('cover') || href.contains('cover')) &&
-            isImageId(id)) {
-          final path = _resolvePath(_opfPath!, entry.value);
-          return loader.getFile(path);
-        }
-      }
-
-      // 4) fallback: first image in manifest
-      for (var entry in _manifestIdToHref!.entries) {
-        final id = entry.key;
-        if (isImageId(id)) {
-          final path = _resolvePath(_opfPath!, entry.value);
-          return loader.getFile(path);
-        }
-      }
-
-      return null;
-    } catch (_) {
-      return null;
-    }
-  }
+  List<TocNode> get toc => _toc ?? [];
 }
