@@ -193,14 +193,55 @@ class EpubReader {
     }
   }
 
-  /// Returns chapter HTML cleaned for presentation:
-  /// - removes any <title> elements (commonly in <head>)
-  /// - returns body.innerHtml when available to avoid including <html>/<head>
   String getCleanChapterHtml(int index) {
     try {
       final raw = getChapterHtml(index);
       final document = html_parser.parse(raw);
       document.getElementsByTagName('title').forEach((e) => e.remove());
+
+      // Resolve the chapter base path so relative image src can be resolved
+      final chapterHref = getChapterHref(index);
+      String? chapterFullPath;
+      if (chapterHref != null && _opfPath != null) {
+        chapterFullPath = _resolvePath(_opfPath!, chapterHref);
+      }
+
+      // Inline <img> sources as data URIs (skip remote and already-inlined images)
+      for (var img in document.getElementsByTagName('img')) {
+        final src = img.attributes['src'];
+        if (src == null) continue;
+        final trimmed = src.trim();
+
+        // Skip absolute http(s) or already data URIs
+        if (trimmed.startsWith('data:') ||
+            trimmed.startsWith('http://') ||
+            trimmed.startsWith('https://')) {
+          continue;
+        }
+
+        if (chapterFullPath == null) continue;
+        final imgPath = _resolvePath(chapterFullPath, trimmed);
+        try {
+          final bytes = loader.getFile(imgPath);
+          // Determine mime type from extension
+          final cleaned = imgPath.split('?').first.split('#').first;
+          final ext = cleaned.contains('.') ? cleaned.split('.').last.toLowerCase() : '';
+          String mime;
+          if (ext == 'svg' || ext == 'svgz') mime = 'image/svg+xml';
+          else if (ext == 'jpg' || ext == 'jpeg') mime = 'image/jpeg';
+          else if (ext == 'png') mime = 'image/png';
+          else if (ext == 'gif') mime = 'image/gif';
+          else if (ext == 'webp') mime = 'image/webp';
+          else mime = 'application/octet-stream';
+
+          final b64 = base64Encode(bytes);
+          img.attributes['src'] = 'data:$mime;base64,$b64';
+        } catch (_) {
+          // If reading the image fails, leave the src as-is so renderer can attempt fallback.
+          continue;
+        }
+      }
+
       return document.body?.innerHtml ?? document.outerHtml;
     } catch (_) {
       // If parsing fails for any reason, fall back to raw HTML
