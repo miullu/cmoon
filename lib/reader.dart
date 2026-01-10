@@ -105,7 +105,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
                       final src = element.attributes['src'] ?? '';
                       if (_reader == null || src.isEmpty) return null;
 
-                      final bytes = _reader.getImageBytesForChapter(_currentChapter, src);
+                      final bytes = _reader.getImageBytesForChapter(
+                        _currentChapter,
+                        src,
+                      );
                       if (bytes != null) {
                         return Image.memory(bytes, fit: BoxFit.contain);
                       }
@@ -187,7 +190,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
             SizedBox(
               height: 24,
               child: VerticalDivider(
-                color: Theme.of(context).colorScheme.onSecondaryContainer.withOpacity(0.3),
+                color: Theme.of(
+                  context,
+                ).colorScheme.onSecondaryContainer.withOpacity(0.3),
                 thickness: 1,
               ),
             ),
@@ -213,7 +218,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
         children: [
           Container(
             padding: const EdgeInsets.fromLTRB(24, 64, 24, 24),
-            color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.5),
+            color: Theme.of(
+              context,
+            ).colorScheme.surfaceVariant.withOpacity(0.5),
             width: double.infinity,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -249,23 +256,35 @@ class _ReaderScreenState extends State<ReaderScreen> {
     );
   }
 
-  List<Widget> _buildFlatTocList(List<dynamic> nodes, String? currentHref, {int depth = 0}) {
+  List<Widget> _buildFlatTocList(
+    List<dynamic> nodes,
+    String? currentHref, {
+    int depth = 0,
+  }) {
     List<Widget> tiles = [];
     for (var node in nodes) {
-      final isSelected = node.href != null && node.href.split('#').first == currentHref;
+      final isSelected =
+          node.href != null && node.href.split('#').first == currentHref;
 
       tiles.add(
         ListTile(
           dense: true,
           visualDensity: VisualDensity.compact,
           selected: isSelected,
-          selectedTileColor: Theme.of(context).colorScheme.primaryContainer.withOpacity(0.3),
-          contentPadding: EdgeInsets.only(left: 24.0 + (depth * 16.0), right: 16.0),
+          selectedTileColor: Theme.of(
+            context,
+          ).colorScheme.primaryContainer.withOpacity(0.3),
+          contentPadding: EdgeInsets.only(
+            left: 24.0 + (depth * 16.0),
+            right: 16.0,
+          ),
           title: Text(
             node.title,
             style: TextStyle(
               fontSize: 14,
-              fontWeight: isSelected ? FontWeight.bold : (depth == 0 ? FontWeight.w600 : FontWeight.normal),
+              fontWeight: isSelected
+                  ? FontWeight.bold
+                  : (depth == 0 ? FontWeight.w600 : FontWeight.normal),
               color: isSelected ? Theme.of(context).colorScheme.primary : null,
             ),
           ),
@@ -274,7 +293,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
       );
 
       if (node.children != null && node.children.isNotEmpty) {
-        tiles.addAll(_buildFlatTocList(node.children, currentHref, depth: depth + 1));
+        tiles.addAll(
+          _buildFlatTocList(node.children, currentHref, depth: depth + 1),
+        );
       }
     }
     return tiles;

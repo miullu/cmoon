@@ -293,7 +293,8 @@ class EpubReader {
       // Helper to test if manifest id matches image
       bool isImageId(String id) {
         final media = _manifestIdToMediaType?[id];
-        if (media != null && media.toLowerCase().startsWith('image/')) return true;
+        if (media != null && media.toLowerCase().startsWith('image/'))
+          return true;
         return false;
       }
 
@@ -311,7 +312,8 @@ class EpubReader {
       for (var entry in _manifestIdToHref!.entries) {
         final id = entry.key;
         final href = entry.value.toLowerCase();
-        if ((id.toLowerCase().contains('cover') || href.contains('cover')) && isImageId(id)) {
+        if ((id.toLowerCase().contains('cover') || href.contains('cover')) &&
+            isImageId(id)) {
           final path = _resolvePath(_opfPath!, entry.value);
           return loader.getFile(path);
         }

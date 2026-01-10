@@ -47,7 +47,7 @@ class LibraryEntry {
   final String title;
   final String pathOnDisk;
   final Uint8List? thumbnail;
-  
+
   // Lazily loaded to save memory in the main list
   Loader? _loader;
   EpubReader? _reader;
@@ -59,8 +59,9 @@ class LibraryEntry {
     this.thumbnail,
   });
 
-  Future<Loader> getLoader() async => _loader ??= await Loader.fromPath(pathOnDisk);
-  
+  Future<Loader> getLoader() async =>
+      _loader ??= await Loader.fromPath(pathOnDisk);
+
   Future<EpubReader> getReader() async {
     if (_reader != null) return _reader!;
     final loader = await getLoader();
@@ -81,7 +82,9 @@ class LibraryEntry {
       id: map['id'] ?? DateTime.now().millisecondsSinceEpoch.toString(),
       title: map['title'] ?? 'Unknown Title',
       pathOnDisk: map['pathOnDisk'] ?? '',
-      thumbnail: map['thumbnail'] != null ? base64Decode(map['thumbnail']) : null,
+      thumbnail: map['thumbnail'] != null
+          ? base64Decode(map['thumbnail'])
+          : null,
     );
   }
 }
@@ -187,12 +190,20 @@ class _HomeScreenState extends State<HomeScreen> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text("Remove Book?"),
-        content: Text("Do you want to remove '${entry.title}'? This will also delete the cached file from your device."),
+        content: Text(
+          "Do you want to remove '${entry.title}'? This will also delete the cached file from your device.",
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("Cancel")),
           TextButton(
-            onPressed: () => Navigator.pop(context, true), 
-            child: Text("Delete Forever", style: TextStyle(color: Theme.of(context).colorScheme.error)),
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text("Cancel"),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(
+              "Delete Forever",
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
           ),
         ],
       ),
@@ -205,7 +216,7 @@ class _HomeScreenState extends State<HomeScreen> {
         if (await file.exists()) {
           await file.delete();
         }
-        
+
         setState(() {
           _library.removeWhere((e) => e.id == entry.id);
         });
@@ -227,10 +238,12 @@ class _HomeScreenState extends State<HomeScreen> {
       final loader = await entry.getLoader();
       final reader = await entry.getReader();
       if (!mounted) return;
-      
-      Navigator.of(context).push(MaterialPageRoute(
-        builder: (_) => ReaderScreen(loader: loader, reader: reader),
-      ));
+
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => ReaderScreen(loader: loader, reader: reader),
+        ),
+      );
     } catch (e) {
       _showError("Failed to open book: $e");
     }
@@ -295,7 +308,11 @@ class _HomeScreenState extends State<HomeScreen> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.auto_stories, size: 64, color: Theme.of(context).colorScheme.outlineVariant),
+          Icon(
+            Icons.auto_stories,
+            size: 64,
+            color: Theme.of(context).colorScheme.outlineVariant,
+          ),
           const SizedBox(height: 16),
           Text(
             "No books yet",
@@ -323,7 +340,7 @@ class _BookCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    
+
     return Card(
       elevation: 0,
       clipBehavior: Clip.antiAlias,
@@ -345,7 +362,11 @@ class _BookCard extends StatelessWidget {
                       ? Image.memory(entry.thumbnail!, fit: BoxFit.cover)
                       : Container(
                           color: theme.colorScheme.surfaceContainerHighest,
-                          child: Icon(Icons.book, size: 48, color: theme.colorScheme.primary.withOpacity(0.5)),
+                          child: Icon(
+                            Icons.book,
+                            size: 48,
+                            color: theme.colorScheme.primary.withOpacity(0.5),
+                          ),
                         ),
                   Positioned(
                     top: 4,
@@ -367,7 +388,9 @@ class _BookCard extends StatelessWidget {
                   entry.title,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.labelLarge?.copyWith(fontWeight: FontWeight.bold),
+                  style: theme.textTheme.labelLarge?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
                   textAlign: TextAlign.center,
                 ),
               ),
