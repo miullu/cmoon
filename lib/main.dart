@@ -97,6 +97,32 @@ class _ReaderScreenState extends State<ReaderScreen> {
     }
   }
 
+  Future<void> _clearCache() async {
+    setState(() => _isLoading = true);
+    try {
+      final bool? cleared = await FilePicker.platform.clearTemporaryFiles();
+      // FilePicker returns `true` if cleared, `false` if nothing to clear, or null on some platforms
+      final message = (cleared == true)
+          ? 'Temporary files cleared.'
+          : (cleared == false)
+              ? 'No temporary files to clear.'
+              : 'Clear temporary files: operation completed.';
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message)),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to clear cache: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
   void _openChapter(int index) {
     if (_reader == null) return;
     setState(() {
@@ -151,7 +177,13 @@ class _ReaderScreenState extends State<ReaderScreen> {
           FilledButton.icon(
             icon: const Icon(Icons.file_open),
             label: const Text("Select EPUB File"),
-            onPressed: _pickBook,
+            onPressed: _isLoading ? null : _pickBook,
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            icon: const Icon(Icons.delete_outline),
+            label: const Text("Clear cache"),
+            onPressed: _isLoading ? null : _clearCache,
           ),
         ],
       ),
