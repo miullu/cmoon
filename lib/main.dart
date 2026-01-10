@@ -206,25 +206,35 @@ class _ReaderScreenState extends State<ReaderScreen> {
       cleanHtml = rawHtml;
     }
 
-    return ListView(
-      controller: _scrollController,
-      padding: const EdgeInsets.fromLTRB(20, 40, 20, 120),
-      children: [
-        HtmlWidget(
-          cleanHtml, 
-          textStyle: const TextStyle(
-            fontSize: 18, 
-            height: 1.6,
-            fontFamily: 'Georgia',
-          )
-        ),
-      ],
+    // Wrap the content in a SafeArea so the status bar won't overlap the HTML content.
+    // Also account for bottom system inset when setting the bottom padding so the
+    // floating bar and system nav don't overlap the scrollable content.
+    final bottomInset = MediaQuery.of(context).padding.bottom;
+    return SafeArea(
+      top: true,
+      bottom: false,
+      child: ListView(
+        controller: _scrollController,
+        padding: EdgeInsets.fromLTRB(20, 20, 20, 120 + bottomInset),
+        children: [
+          HtmlWidget(
+            cleanHtml, 
+            textStyle: const TextStyle(
+              fontSize: 18, 
+              height: 1.6,
+              fontFamily: 'Georgia',
+            )
+          ),
+        ],
+      ),
     );
   }
 
   Widget _buildAnimatedFloatingBar(BuildContext context) {
+    final bottomInset = MediaQuery.of(context).padding.bottom;
     return Positioned(
-      bottom: 24,
+      // place it above the system bottom inset (navigation bar / home indicator)
+      bottom: bottomInset + 24,
       left: 0,
       right: 0,
       child: Center(
