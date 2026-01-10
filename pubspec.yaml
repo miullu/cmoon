@@ -9,11 +9,10 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  file_picker: ^10.3.8
   flutter_widget_from_html: ^0.17.1
+  file_picker: ^10.3.8
   xml: ^6.5.0
   archive: ^4.0.7
-  html: ^0.15.4
 dev_dependencies:
   flutter_test:
     sdk: flutter
