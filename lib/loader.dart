@@ -34,10 +34,10 @@ class Loader {
   }
 
   factory Loader.fromBytes(Uint8List bytes) {
-  	final archive = ZipDecoder().decodeBytes(bytes);
-  	return Loader._(archive, "<memory>");
+    final archive = ZipDecoder().decodeBytes(bytes);
+    return Loader._(archive, "<memory>");
   }
-  
+
   /// Retrieve a file from the EPUB archive by relative path.
   Uint8List getFile(String path) {
     final normalized = path.replaceAll('\\', '/');
