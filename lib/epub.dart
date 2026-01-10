@@ -20,7 +20,10 @@ class EpubReader {
   Map<String, String>? _metadata;
   List<String>? _spineIds;
   Map<String, String>? _manifestIdToHref;
+  Map<String, String>? _manifestIdToMediaType;
+  Map<String, String>? _manifestIdToProperties;
   List<TocNode>? _toc;
+  String? _coverId; // explicit cover id from <meta name="cover" content="...">
 
   EpubReader(this.loader);
 
@@ -43,18 +46,37 @@ class EpubReader {
     final metadataBase = package.findElements('metadata').first;
     for (var node in metadataBase.children) {
       if (node is XmlElement) {
+        // Simple metadata mapping (title, creator, etc.)
         _metadata![node.name.local] = node.innerText;
       }
     }
 
-    // Parse Manifest (ID -> Href mapping)
+    // Additionally detect <meta name="cover" content="id"> (EPUB2 cover reference)
+    for (var meta in metadataBase.findElements('meta')) {
+      final nameAttr = meta.getAttribute('name');
+      if (nameAttr != null && nameAttr.toLowerCase() == 'cover') {
+        final content = meta.getAttribute('content');
+        if (content != null && content.isNotEmpty) {
+          _coverId = content;
+          break;
+        }
+      }
+    }
+
+    // Parse Manifest (ID -> Href mapping) and record media-type/properties
     _manifestIdToHref = {};
+    _manifestIdToMediaType = {};
+    _manifestIdToProperties = {};
     final manifestBase = package.findElements('manifest').first;
     for (var item in manifestBase.findElements('item')) {
       final id = item.getAttribute('id');
       final href = item.getAttribute('href');
+      final media = item.getAttribute('media-type');
+      final props = item.getAttribute('properties');
       if (id != null && href != null) {
         _manifestIdToHref![id] = Uri.decodeFull(href);
+        if (media != null) _manifestIdToMediaType![id] = media;
+        if (props != null) _manifestIdToProperties![id] = props;
       }
     }
 
@@ -243,6 +265,68 @@ class EpubReader {
       if (chapterFull == null) return null;
       final imgPath = _resolvePath(chapterFull, hrefFromHtml);
       return loader.getFile(imgPath);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Attempts to extract a thumbnail/cover image from the EPUB.
+  /// Strategy (in order):
+  /// 1. If <meta name="cover" content="cover-id"> exists in OPF metadata, use that manifest item.
+  /// 2. Prefer manifest items with properties containing "cover-image".
+  /// 3. Look for manifest items whose id or href includes "cover" and have image media-type.
+  /// 4. Fallback to the first item in the manifest with an image media-type.
+  /// Returns null if none found or on error.
+  Uint8List? getThumbnailBytes() {
+    try {
+      if (_manifestIdToHref == null) return null;
+
+      // 1) explicit cover meta
+      if (_coverId != null) {
+        final href = _manifestIdToHref![_coverId!];
+        if (href != null) {
+          final path = _resolvePath(_opfPath!, href);
+          return loader.getFile(path);
+        }
+      }
+
+      // Helper to test if manifest id matches image
+      bool isImageId(String id) {
+        final media = _manifestIdToMediaType?[id];
+        if (media != null && media.toLowerCase().startsWith('image/')) return true;
+        return false;
+      }
+
+      // 2) manifest items with properties containing "cover-image"
+      for (var entry in _manifestIdToHref!.entries) {
+        final id = entry.key;
+        final props = _manifestIdToProperties?[id]?.toLowerCase() ?? '';
+        if (props.contains('cover-image') && isImageId(id)) {
+          final path = _resolvePath(_opfPath!, entry.value);
+          return loader.getFile(path);
+        }
+      }
+
+      // 3) look for id/href heuristics (id or href contains 'cover')
+      for (var entry in _manifestIdToHref!.entries) {
+        final id = entry.key;
+        final href = entry.value.toLowerCase();
+        if ((id.toLowerCase().contains('cover') || href.contains('cover')) && isImageId(id)) {
+          final path = _resolvePath(_opfPath!, entry.value);
+          return loader.getFile(path);
+        }
+      }
+
+      // 4) fallback: first image in manifest
+      for (var entry in _manifestIdToHref!.entries) {
+        final id = entry.key;
+        if (isImageId(id)) {
+          final path = _resolvePath(_opfPath!, entry.value);
+          return loader.getFile(path);
+        }
+      }
+
+      return null;
     } catch (_) {
       return null;
     }

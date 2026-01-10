@@ -1,9 +1,15 @@
+import 'dart:typed_data';
+import 'dart:io';
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter_widget_from_html/flutter_widget_from_html.dart';
+import 'package:path/path.dart' as p;
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'loader.dart';
 import 'epub.dart';
+import 'reader.dart';
 
 void main() {
   runApp(const EpubReaderApp());
@@ -22,77 +28,167 @@ class EpubReaderApp extends StatelessWidget {
         colorSchemeSeed: Colors.indigo,
         brightness: Brightness.light,
       ),
-      home: const ReaderScreen(),
+      home: const HomeScreen(),
     );
   }
 }
 
-class ReaderScreen extends StatefulWidget {
-  const ReaderScreen({super.key});
+class LibraryEntry {
+  final String id;
+  final String title;
+  final Loader loader;
+  final EpubReader reader;
+  final Uint8List? thumbnail;
+  final String pathOnDisk;
 
-  @override
-  State<ReaderScreen> createState() => _ReaderScreenState();
+  LibraryEntry({
+    required this.id,
+    required this.title,
+    required this.loader,
+    required this.reader,
+    this.thumbnail,
+    required this.pathOnDisk,
+  });
+
+  // For persistence: store only serializable pieces
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'title': title,
+      'pathOnDisk': pathOnDisk,
+      'thumbnail': thumbnail != null ? base64Encode(thumbnail!) : null,
+    };
+  }
+
+  static Map<String, dynamic> schemaFromJson(Map<String, dynamic> map) {
+    // helper if needed externally
+    return map;
+  }
 }
 
-class _ReaderScreenState extends State<ReaderScreen> {
-  Loader? _loader;
-  EpubReader? _reader;
-  int _currentChapter = 0;
+class HomeScreen extends StatefulWidget {
+  const HomeScreen({super.key});
 
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  final List<LibraryEntry> _library = [];
   bool _isLoading = false;
-  bool _isBookLoaded = false;
-
-  final ScrollController _scrollController = ScrollController();
-  bool _showFloatingBar = true;
-  double _lastOffset = 0;
+  static const _prefsKey = 'library';
 
   @override
   void initState() {
     super.initState();
-    _scrollController.addListener(_onScroll);
+    _loadLibrary();
   }
 
-  @override
-  void dispose() {
-    _scrollController.dispose();
-    super.dispose();
-  }
+  Future<void> _loadLibrary() async {
+    setState(() => _isLoading = true);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_prefsKey);
+      if (raw == null) {
+        setState(() => _isLoading = false);
+        return;
+      }
 
-  void _onScroll() {
-    if (!_scrollController.hasClients) return;
-    
-    final currentOffset = _scrollController.offset;
+      final List<dynamic> list = jsonDecode(raw);
+      final List<LibraryEntry> restored = [];
 
-    if (currentOffset < _lastOffset || 
-        currentOffset <= 0 ||
-        currentOffset >= _scrollController.position.maxScrollExtent - 50) {
-      if (!_showFloatingBar) setState(() => _showFloatingBar = true);
-    } 
-    else if (currentOffset > _lastOffset && currentOffset > 100) {
-      if (_showFloatingBar) setState(() => _showFloatingBar = false);
+      for (var item in list) {
+        try {
+          final map = Map<String, dynamic>.from(item as Map);
+          final path = map['pathOnDisk'] as String? ?? '';
+          if (path.isEmpty) continue;
+
+          // If the physical file no longer exists, skip (prune)
+          if (!File(path).existsSync()) continue;
+
+          // Recreate loader/reader for the saved copy
+          final loader = await Loader.fromPath(path);
+          final reader = EpubReader(loader);
+          reader.init();
+
+          // thumbnail from storage if present; otherwise try to extract
+          Uint8List? thumbBytes;
+          final thumbBase64 = map['thumbnail'] as String?;
+          if (thumbBase64 != null && thumbBase64.isNotEmpty) {
+            try {
+              thumbBytes = base64Decode(thumbBase64);
+            } catch (_) {
+              thumbBytes = null;
+            }
+          }
+          thumbBytes ??= reader.getThumbnailBytes();
+
+          restored.add(LibraryEntry(
+            id: map['id'] as String? ?? DateTime.now().microsecondsSinceEpoch.toString(),
+            title: map['title'] as String? ?? p.basename(path),
+            loader: loader,
+            reader: reader,
+            thumbnail: thumbBytes,
+            pathOnDisk: path,
+          ));
+        } catch (_) {
+          // skip a broken entry but continue restoring others
+        }
+      }
+
+      // Save pruned list back (so missing files are removed from storage)
+      _library.clear();
+      _library.addAll(restored);
+      await _saveLibrary();
+    } catch (e) {
+      // ignore load errors; start with empty library
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
-    _lastOffset = currentOffset;
+  }
+
+  Future<void> _saveLibrary() async {
+    final prefs = await SharedPreferences.getInstance();
+    final list = _library.map((e) => e.toJson()).toList();
+    await prefs.setString(_prefsKey, jsonEncode(list));
   }
 
   Future<void> _pickBook() async {
     setState(() => _isLoading = true);
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['epub'],
-      withData: true,
-    );
-    if (result != null && result.files.single.bytes != null) {
-      _loader = Loader.fromBytes(result.files.single.bytes!);
-      _reader = EpubReader(_loader!);
-      _reader!.init(); 
+    try {
+      // Use Loader.pickEpub so loader.epubFilePath points to the picked file (copy on disk)
+      final loader = await Loader.pickEpub();
+      if (loader == null) {
+        setState(() => _isLoading = false);
+        return;
+      }
+
+      final reader = EpubReader(loader);
+      reader.init();
+
+      final title = reader.getMetadata()['title'] ?? p.basename(loader.epubFilePath);
+      final thumb = reader.getThumbnailBytes();
+      final entry = LibraryEntry(
+        id: DateTime.now().microsecondsSinceEpoch.toString(),
+        title: title,
+        loader: loader,
+        reader: reader,
+        thumbnail: thumb,
+        pathOnDisk: loader.epubFilePath,
+      );
+
       setState(() {
-        _isBookLoaded = true;
-        _currentChapter = 0;
-        _isLoading = false;
-        _showFloatingBar = true;
+        _library.insert(0, entry); // newest first
       });
-    } else {
-      setState(() => _isLoading = false);
+
+      await _saveLibrary();
+
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Failed to open EPUB: $e")));
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -100,7 +196,6 @@ class _ReaderScreenState extends State<ReaderScreen> {
     setState(() => _isLoading = true);
     try {
       final bool? cleared = await FilePicker.platform.clearTemporaryFiles();
-      // FilePicker returns `true` if cleared, `false` if nothing to clear, or null on some platforms
       final message = (cleared == true)
           ? 'Temporary files cleared.'
           : (cleared == false)
@@ -122,38 +217,58 @@ class _ReaderScreenState extends State<ReaderScreen> {
     }
   }
 
-  void _openChapter(int index) {
-    if (_reader == null) return;
+  void _openLibraryEntry(LibraryEntry entry) {
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => ReaderScreen(loader: entry.loader, reader: entry.reader),
+    ));
+  }
+
+  Future<void> _removeEntry(LibraryEntry entry) async {
     setState(() {
-      _currentChapter = index;
-      _showFloatingBar = true;
+      _library.removeWhere((e) => e.id == entry.id);
     });
-    if (_scrollController.hasClients) {
-      _scrollController.jumpTo(0);
-    }
-    if (Navigator.canPop(context)) {
-      Navigator.pop(context);
-    }
+    await _saveLibrary();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Builder(
-        builder: (innerContext) => Stack(
-          children: [
-            _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : !_isBookLoaded
-                    ? _buildEmptyState()
-                    : _buildChapterView(),
-
-            if (_isBookLoaded && !_isLoading)
-              _buildAnimatedFloatingBar(innerContext),
-          ],
-        ),
+      appBar: AppBar(
+        title: const Text('My Library'),
       ),
-      drawer: _isBookLoaded ? _buildTocDrawer() : null,
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : Padding(
+              padding: const EdgeInsets.all(12.0),
+              child: Column(
+                children: [
+                  Expanded(
+                    child: _library.isEmpty ? _buildEmptyState() : _buildLibraryList(),
+                  ),
+
+                  // Buttons: placed below the library; as library grows the buttons move downward.
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8.0),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        FilledButton.icon(
+                          icon: const Icon(Icons.file_open),
+                          label: const Text("Select EPUB File"),
+                          onPressed: _isLoading ? null : _pickBook,
+                        ),
+                        const SizedBox(width: 12),
+                        OutlinedButton.icon(
+                          icon: const Icon(Icons.delete_outline),
+                          label: const Text("Clear cache"),
+                          onPressed: _isLoading ? null : _clearCache,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
     );
   }
 
@@ -172,236 +287,37 @@ class _ReaderScreenState extends State<ReaderScreen> {
             "Your library is empty",
             style: Theme.of(context).textTheme.headlineSmall,
           ),
-          const SizedBox(height: 16),
-          FilledButton.icon(
-            icon: const Icon(Icons.file_open),
-            label: const Text("Select EPUB File"),
-            onPressed: _isLoading ? null : _pickBook,
-          ),
-          const SizedBox(height: 8),
-          OutlinedButton.icon(
-            icon: const Icon(Icons.delete_outline),
-            label: const Text("Clear cache"),
-            onPressed: _isLoading ? null : _clearCache,
-          ),
         ],
       ),
     );
   }
 
-  Widget _buildChapterView() {
-    final cleanHtml = _reader!.getCleanChapterHtml(_currentChapter);
-
-    // Wrap the content in a SafeArea so the status bar won't overlap the HTML content.
-    // Also account for bottom system inset when setting the bottom padding so the
-    // floating bar and system nav don't overlap the scrollable content.
-    final bottomInset = MediaQuery.of(context).padding.bottom;
-    return SafeArea(
-      top: true,
-      bottom: false,
-      child: ListView(
-        controller: _scrollController,
-        padding: EdgeInsets.fromLTRB(20, 20, 20, 120 + bottomInset),
-        children: [
-          // HtmlWidget configured to resolve images at render time by asking
-          // the EpubReader for bytes for each <img src>.
-          HtmlWidget(
-            cleanHtml,
-            // Use `customWidgetBuilder` (v0.17.1) to intercept <img> elements.
-            // Return an Image.memory when we can resolve bytes from the epub,
-            // otherwise return null to fall back to the default renderer.
-            customWidgetBuilder: (element) {
-              try {
-                // element is typically a DOM element from package:html
-                if (element.localName != 'img') return null;
-                final src = element.attributes['src'] ?? '';
-                if (_reader == null || src.isEmpty) return null;
-
-                final bytes = _reader!.getImageBytesForChapter(_currentChapter, src);
-                if (bytes != null) {
-                  return Image.memory(bytes, fit: BoxFit.contain);
-                }
-              } catch (_) {
-                // ignore and fall back to default rendering
-              }
-              return null;
-            },
-            textStyle: const TextStyle(
-              fontSize: 18, 
-              height: 1.6,
-              fontFamily: 'Georgia',
-            )
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildAnimatedFloatingBar(BuildContext context) {
-    final bottomInset = MediaQuery.of(context).padding.bottom;
-    return Positioned(
-      // place it above the system bottom inset (navigation bar / home indicator)
-      bottom: bottomInset + 24,
-      left: 0,
-      right: 0,
-      child: Center(
-        child: AnimatedSlide(
-          offset: _showFloatingBar ? Offset.zero : const Offset(0, 2),
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeInOutCubic,
-          child: AnimatedOpacity(
-            opacity: _showFloatingBar ? 1.0 : 0.0,
-            duration: const Duration(milliseconds: 200),
-            child: _buildFloatingBarContent(context),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildFloatingBarContent(BuildContext context) {
-    return Card(
-      elevation: 4,
-      shadowColor: Colors.black26,
-      color: Theme.of(context).colorScheme.secondaryContainer,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            IconButton(
-              icon: const Icon(Icons.chevron_left),
-              onPressed: _currentChapter > 0
-                  ? () => _openChapter(_currentChapter - 1)
-                  : null,
-              tooltip: "Previous Chapter",
-            ),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              constraints: const BoxConstraints(minWidth: 80),
-              child: Text(
-                "${_currentChapter + 1} / ${_reader!.chapterCount}",
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                  fontWeight: FontWeight.bold,
-                  color: Theme.of(context).colorScheme.onSecondaryContainer,
-                ),
-              ),
-            ),
-            IconButton(
-              icon: const Icon(Icons.chevron_right),
-              onPressed: _currentChapter < _reader!.chapterCount - 1
-                  ? () => _openChapter(_currentChapter + 1)
-                  : null,
-              tooltip: "Next Chapter",
-            ),
-            const SizedBox(width: 4),
-            SizedBox(
-              height: 24,
-              child: VerticalDivider(
-                color: Theme.of(context).colorScheme.onSecondaryContainer.withOpacity(0.3),
-                thickness: 1,
-              ),
-            ),
-            const SizedBox(width: 4),
-            IconButton(
-              icon: const Icon(Icons.menu_open_rounded),
-              onPressed: () => Scaffold.of(context).openDrawer(),
-              tooltip: "Table of Contents",
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTocDrawer() {
-    final metadata = _reader!.getMetadata();
-    final currentHref = _reader!.getChapterHref(_currentChapter);
-
-    return Drawer(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            padding: const EdgeInsets.fromLTRB(24, 64, 24, 24),
-            color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.5),
-            width: double.infinity,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  "CONTENTS",
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    letterSpacing: 1.2,
-                    fontWeight: FontWeight.bold,
-                    color: Theme.of(context).colorScheme.primary,
+  Widget _buildLibraryList() {
+    return ListView.separated(
+      itemCount: _library.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 8),
+      itemBuilder: (_, idx) {
+        final item = _library[idx];
+        return Card(
+          child: ListTile(
+            leading: item.thumbnail != null
+                ? Image.memory(item.thumbnail!, width: 48, height: 64, fit: BoxFit.cover)
+                : Container(
+                    width: 48,
+                    height: 64,
+                    color: Colors.grey.shade200,
+                    child: const Icon(Icons.book, size: 28, color: Colors.grey),
                   ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  metadata['title'] ?? 'Book Contents',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
+            title: Text(item.title),
+            subtitle: Text(item.pathOnDisk, maxLines: 1, overflow: TextOverflow.ellipsis),
+            onTap: () => _openLibraryEntry(item),
+            trailing: IconButton(
+              icon: const Icon(Icons.delete_outline),
+              onPressed: () => _removeEntry(item),
             ),
           ),
-          Expanded(
-            child: ListView(
-              padding: EdgeInsets.zero,
-              children: _buildFlatTocList(_reader!.toc, currentHref),
-            ),
-          ),
-        ],
-      ),
+        );
+      },
     );
-  }
-
-  /// Flattens the TOC tree into a list of tiles with indentation
-  List<Widget> _buildFlatTocList(List<dynamic> nodes, String? currentHref, {int depth = 0}) {
-    List<Widget> tiles = [];
-    for (var node in nodes) {
-      final isSelected = node.href != null && node.href.split('#').first == currentHref;
-      
-      tiles.add(
-        ListTile(
-          dense: true,
-          visualDensity: VisualDensity.compact,
-          selected: isSelected,
-          selectedTileColor: Theme.of(context).colorScheme.primaryContainer.withOpacity(0.3),
-          contentPadding: EdgeInsets.only(left: 24.0 + (depth * 16.0), right: 16.0),
-          title: Text(
-            node.title,
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: isSelected ? FontWeight.bold : (depth == 0 ? FontWeight.w600 : FontWeight.normal),
-              color: isSelected ? Theme.of(context).colorScheme.primary : null,
-            ),
-          ),
-          onTap: () => _navigateToHref(node.href),
-        ),
-      );
-
-      if (node.children != null && node.children.isNotEmpty) {
-        tiles.addAll(_buildFlatTocList(node.children, currentHref, depth: depth + 1));
-      }
-    }
-    return tiles;
-  }
-
-  void _navigateToHref(String? href) {
-    if (href == null) return;
-    final baseHref = href.split('#').first;
-    for (int i = 0; i < _reader!.chapterCount; i++) {
-      if (_reader!.getChapterHref(i) == baseHref) {
-        _openChapter(i);
-        break;
-      }
-    }
   }
 }

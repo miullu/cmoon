@@ -33,6 +33,14 @@ class Loader {
     return Loader._(archive, filePath);
   }
 
+  /// Opens an EPUB copy that already exists on disk (path).
+  /// Useful for re-opening file-picker copies persisted between runs.
+  static Future<Loader> fromPath(String path) async {
+    final bytes = await File(path).readAsBytes();
+    final archive = ZipDecoder().decodeBytes(bytes);
+    return Loader._(archive, path);
+  }
+
   factory Loader.fromBytes(Uint8List bytes) {
     final archive = ZipDecoder().decodeBytes(bytes);
     return Loader._(archive, "<memory>");
