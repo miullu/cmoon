@@ -203,8 +203,29 @@ class _ReaderScreenState extends State<ReaderScreen> {
         controller: _scrollController,
         padding: EdgeInsets.fromLTRB(20, 20, 20, 120 + bottomInset),
         children: [
+          // HtmlWidget configured to resolve images at render time by asking
+          // the EpubReader for bytes for each <img src>.
           HtmlWidget(
-            cleanHtml, 
+            cleanHtml,
+            // Use `customWidgetBuilder` (v0.17.1) to intercept <img> elements.
+            // Return an Image.memory when we can resolve bytes from the epub,
+            // otherwise return null to fall back to the default renderer.
+            customWidgetBuilder: (element) {
+              try {
+                // element is typically a DOM element from package:html
+                if (element.localName != 'img') return null;
+                final src = element.attributes['src'] ?? '';
+                if (_reader == null || src.isEmpty) return null;
+
+                final bytes = _reader!.getImageBytesForChapter(_currentChapter, src);
+                if (bytes != null) {
+                  return Image.memory(bytes, fit: BoxFit.contain);
+                }
+              } catch (_) {
+                // ignore and fall back to default rendering
+              }
+              return null;
+            },
             textStyle: const TextStyle(
               fontSize: 18, 
               height: 1.6,

@@ -199,48 +199,9 @@ class EpubReader {
       final document = html_parser.parse(raw);
       document.getElementsByTagName('title').forEach((e) => e.remove());
 
-      // Resolve the chapter base path so relative image src can be resolved
-      final chapterHref = getChapterHref(index);
-      String? chapterFullPath;
-      if (chapterHref != null && _opfPath != null) {
-        chapterFullPath = _resolvePath(_opfPath!, chapterHref);
-      }
-
-      // Inline <img> sources as data URIs (skip remote and already-inlined images)
-      for (var img in document.getElementsByTagName('img')) {
-        final src = img.attributes['src'];
-        if (src == null) continue;
-        final trimmed = src.trim();
-
-        // Skip absolute http(s) or already data URIs
-        if (trimmed.startsWith('data:') ||
-            trimmed.startsWith('http://') ||
-            trimmed.startsWith('https://')) {
-          continue;
-        }
-
-        if (chapterFullPath == null) continue;
-        final imgPath = _resolvePath(chapterFullPath, trimmed);
-        try {
-          final bytes = loader.getFile(imgPath);
-          // Determine mime type from extension
-          final cleaned = imgPath.split('?').first.split('#').first;
-          final ext = cleaned.contains('.') ? cleaned.split('.').last.toLowerCase() : '';
-          String mime;
-          if (ext == 'svg' || ext == 'svgz') mime = 'image/svg+xml';
-          else if (ext == 'jpg' || ext == 'jpeg') mime = 'image/jpeg';
-          else if (ext == 'png') mime = 'image/png';
-          else if (ext == 'gif') mime = 'image/gif';
-          else if (ext == 'webp') mime = 'image/webp';
-          else mime = 'application/octet-stream';
-
-          final b64 = base64Encode(bytes);
-          img.attributes['src'] = 'data:$mime;base64,$b64';
-        } catch (_) {
-          // If reading the image fails, leave the src as-is so renderer can attempt fallback.
-          continue;
-        }
-      }
+      // Previously images were inlined here. We no longer inline; the HTML
+      // renderer will resolve images at runtime via the reader API.
+      // This preserves original src attributes (relative paths).
 
       return document.body?.innerHtml ?? document.outerHtml;
     } catch (_) {
@@ -264,4 +225,26 @@ class EpubReader {
   Map<String, String> getMetadata() => _metadata ?? {};
   List<TocNode> get toc => _toc ?? [];
   int get chapterCount => _spineIds?.length ?? 0;
+
+  /// Public helper: returns the resolved (OPF-based) full path for a chapter.
+  /// Example: "OPS/chapter1.xhtml"
+  String? getChapterFullPath(int index) {
+    final href = getChapterHref(index);
+    if (href == null || _opfPath == null) return null;
+    return _resolvePath(_opfPath!, href);
+  }
+
+  /// Public helper: return image bytes for an image referenced from HTML
+  /// inside [chapterIndex]. It resolves the relative path against the chapter
+  /// full path and returns null if not found or on error.
+  Uint8List? getImageBytesForChapter(int chapterIndex, String hrefFromHtml) {
+    try {
+      final chapterFull = getChapterFullPath(chapterIndex);
+      if (chapterFull == null) return null;
+      final imgPath = _resolvePath(chapterFull, hrefFromHtml);
+      return loader.getFile(imgPath);
+    } catch (_) {
+      return null;
+    }
+  }
 }
