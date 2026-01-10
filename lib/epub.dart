@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 import 'dart:convert';
 import 'package:xml/xml.dart';
+import 'package:html/parser.dart' as html_parser;
 import 'loader.dart';
 
 class TocNode {
@@ -192,7 +193,21 @@ class EpubReader {
     }
   }
 
-  // Add this to EpubReader class in epub.dart
+  /// Returns chapter HTML cleaned for presentation:
+  /// - removes any <title> elements (commonly in <head>)
+  /// - returns body.innerHtml when available to avoid including <html>/<head>
+  String getCleanChapterHtml(int index) {
+    try {
+      final raw = getChapterHtml(index);
+      final document = html_parser.parse(raw);
+      document.getElementsByTagName('title').forEach((e) => e.remove());
+      return document.body?.innerHtml ?? document.outerHtml;
+    } catch (_) {
+      // If parsing fails for any reason, fall back to raw HTML
+      return getChapterHtml(index);
+    }
+  }
+
   String? getChapterHref(int index) {
     if (_spineIds == null || index < 0 || index >= _spineIds!.length)
       return null;

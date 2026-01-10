@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_widget_from_html/flutter_widget_from_html.dart';
-import 'package:html/parser.dart' as html_parser;
 
 import 'loader.dart';
 import 'epub.dart';
@@ -191,20 +190,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   Widget _buildChapterView() {
-    final rawHtml = _reader!.getChapterHtml(_currentChapter) ?? "<p>Empty chapter</p>";
-
-    // Parse and remove any <title> elements so flutter_widget_from_html doesn't render them.
-    String cleanHtml;
-    try {
-      final document = html_parser.parse(rawHtml);
-      // Remove all <title> tags (commonly inside <head>)
-      document.getElementsByTagName('title').forEach((e) => e.remove());
-      // Use body innerHtml if available (avoids including <html> / <head>)
-      cleanHtml = document.body?.innerHtml ?? document.outerHtml;
-    } catch (e) {
-      // If parsing fails for any reason, fall back to original HTML
-      cleanHtml = rawHtml;
-    }
+    final cleanHtml = _reader!.getCleanChapterHtml(_currentChapter);
 
     // Wrap the content in a SafeArea so the status bar won't overlap the HTML content.
     // Also account for bottom system inset when setting the bottom padding so the
