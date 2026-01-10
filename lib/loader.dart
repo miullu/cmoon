@@ -1,43 +1,58 @@
 import 'dart:typed_data';
+import 'dart:convert';
+import 'dart:io';
+import 'package:file_picker/file_picker.dart';
 import 'package:archive/archive.dart';
 
+/// Loader abstracts file access for EpubReader.
+/// It hides whether the EPUB is in RAM, disk, or elsewhere.
 class Loader {
-  Archive? _archive;
-  // Use a case-insensitive index to prevent crashes on mismatched casing
-  final Map<String, ArchiveFile> _index = {};
+  late Archive _archive;
+  late String _epubFilePath;
 
-  /// Load EPUB/ZIP using standard decoding
-  void loadFromBytes(Uint8List bytes) {
-    if (bytes.isEmpty) {
-      throw Exception("Invalid file: empty");
+  Loader._(this._archive, this._epubFilePath);
+
+  /// Opens a system file picker to select an EPUB file.
+  /// Returns a Loader instance ready to serve files.
+  static Future<Loader?> pickEpub() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['epub'],
+    );
+
+    if (result == null || result.files.isEmpty) {
+      return null; // user cancelled
     }
 
-    // Fix: Use decodeBytes instead of decodeBuffer to resolve the 4.0.7 compilation error
-    _archive = ZipDecoder().decodeBytes(bytes);
+    final filePath = result.files.single.path;
+    if (filePath == null) return null;
 
-    _index.clear();
-    for (final file in _archive!.files) {
-      // Store reference using lowercase key for robust searching
-      _index[file.name.toLowerCase()] = file;
-    }
+    final bytes = await File(filePath).readAsBytes();
+    final archive = ZipDecoder().decodeBytes(bytes);
+
+    return Loader._(archive, filePath);
   }
 
-  /// Lists all files in the archive (for debugging/listing)
-  List<String> listFiles() => _index.keys.toList();
-
-  /// Extracts and returns the bytes of a specific file
+  factory Loader.fromBytes(Uint8List bytes) {
+  	final archive = ZipDecoder().decodeBytes(bytes);
+  	return Loader._(archive, "<memory>");
+  }
+  
+  /// Retrieve a file from the EPUB archive by relative path.
   Uint8List getFile(String path) {
-    if (_archive == null) throw Exception("Loader not initialized");
-
-    // Normalize path: handle backslashes and casing
-    final normalizedPath = path.replaceAll('\\', '/').toLowerCase();
-
-    final file = _index[normalizedPath];
+    final normalized = path.replaceAll('\\', '/');
+    final file = _archive.findFile(normalized);
     if (file == null) {
-      throw Exception("File not found in archive: $path");
+      throw Exception("File not found in EPUB: $normalized");
     }
-
-    // Ensure the content is returned specifically as Uint8List
-    return file.content as Uint8List;
+    return Uint8List.fromList(file.content as List<int>);
   }
+
+  /// Convenience: get raw text file as string
+  String getTextFile(String path, {Encoding encoding = utf8}) {
+    return encoding.decode(getFile(path));
+  }
+
+  /// Returns the original EPUB file path (on disk).
+  String get epubFilePath => _epubFilePath;
 }
