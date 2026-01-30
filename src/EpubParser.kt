@@ -90,13 +90,12 @@ object EpubParser {
                     when (parser.name.lowercase()) {
                         "h1", "h2", "h3", "h4", "h5", "h6" -> nodes.add(RenderNode.Block(BlockType.Header, extractText(parser)))
                         "p" -> nodes.add(RenderNode.Block(BlockType.Paragraph, extractText(parser)))
-                        "div", "body" -> nodes.add(RenderNode.Block(BlockType.Div, extractText(parser)))
+                        // Do NOT call extractText on body/div here — let the loop enter their children
                         "img", "image" -> {
-                            val src = parser.getAttributeValue(null, "src") 
+                            val src = parser.getAttributeValue(null, "src")
                                 ?: parser.getAttributeValue(null, "href") // for svg image
                             src?.let {
                                 val cleanSrc = URLDecoder.decode(it, "UTF-8")
-                                // Use the canonicalize helper to fix "../" paths
                                 val resolved = canonicalizePath(path, cleanSrc)
                                 nodes.add(RenderNode.ImageNode(resolved))
                             }
@@ -107,7 +106,7 @@ object EpubParser {
             nodes
         } ?: emptyList()
     }
-
+    
     fun loadImage(context: Context, uri: Uri, path: String): Bitmap? {
         return scanForEntry(context, uri, path) { stream ->
             BitmapFactory.decodeStream(stream)
