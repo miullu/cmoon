@@ -5,229 +5,223 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.Xml
+import org.apache.commons.compress.archivers.zip.ZipFile
 import org.xmlpull.v1.XmlPullParser
+import java.io.FileInputStream
 import java.io.InputStream
+import java.net.URI
 import java.net.URLDecoder
-import java.util.zip.ZipEntry
-import java.util.zip.ZipInputStream
 
 object EpubParser {
 
-    // Helper to resolve "Text/../Images/icon.png" -> "Images/icon.png"
-    private fun canonicalizePath(basePath: String, relativePath: String): String {
-        if (relativePath.startsWith("/")) return relativePath.removePrefix("/")
-
-        val baseDir = if (basePath.contains("/")) basePath.substringBeforeLast("/") else ""
-        val combined = if (baseDir.isNotEmpty()) "$baseDir/$relativePath" else relativePath
-
-        val parts = combined.split("/")
-        val stack = ArrayDeque<String>()
-
-        for (part in parts) {
-            when (part) {
-                ".", "" -> continue
-                ".." -> if (stack.isNotEmpty()) stack.removeLast()
-                else -> stack.addLast(part)
-            }
-        }
-        return stack.joinToString("/")
-    }
+    // ============================================================================================
+    // Public API
+    // ============================================================================================
 
     fun openBook(context: Context, uri: Uri): EpubBook {
-        val opfPath = scanForEntry(context, uri, "META-INF/container.xml") { stream ->
-            val parser = Xml.newPullParser().apply { setInput(stream, null) }
-            var path = ""
-            while (parser.next() != XmlPullParser.END_DOCUMENT) {
-                if (parser.eventType == XmlPullParser.START_TAG && parser.name == "rootfile") {
-                    path = parser.getAttributeValue(null, "full-path")
-                }
-            }
-            path
-        } ?: throw Exception("Invalid EPUB: No container.xml")
+        return useZip(context, uri) { zipFile ->
+            // 1. Find the OPF file path from container.xml
+            val opfPath = findOpfPath(zipFile) 
+                ?: throw Exception("Invalid EPUB: No container.xml found")
 
-        return scanForEntry(context, uri, opfPath) { stream ->
-            parseOpf(context, uri, stream, opfPath)
-        } ?: throw Exception("OPF file not found")
+            // 2. Parse OPF to get metadata, spine, and TOC location
+            val rawOpfData = useEntry(zipFile, opfPath) { stream ->
+                parseOpfData(stream, opfPath)
+            } ?: throw Exception("OPF file not found at $opfPath")
+
+            // 3. Parse the Table of Contents (TOC) to get Chapter Titles
+            val tocMap = rawOpfData.tocPath?.let { tocPath ->
+                useEntry(zipFile, tocPath) { stream ->
+                    parseToc(stream, tocPath, opfPath)
+                }
+            } ?: emptyMap()
+
+            // 4. Construct the final book object
+            // Map spine IDs to actual file paths
+            val spinePaths = rawOpfData.spineRefs.mapNotNull { rawOpfData.manifest[it] }
+
+            EpubBook(
+                uri = uri,
+                title = rawOpfData.title,
+                spine = spinePaths,
+                manifest = rawOpfData.manifest,
+                toc = tocMap
+            )
+        }
     }
 
-    private fun parseOpf(context: Context, uri: Uri, stream: InputStream, opfPath: String): EpubBook {
-        val parser = Xml.newPullParser().apply { setInput(stream, null) }
-        val manifest = mutableMapOf<String, String>() // id -> href (canonicalized)
-        val mediaTypes = mutableMapOf<String, String?>() // id -> media-type
-        val propertiesMap = mutableMapOf<String, String?>() // id -> properties
-        val spineRefs = mutableListOf<String>()
-        var title = "Unknown Title"
-        var spineTocId: String? = null
-
-        while (parser.next() != XmlPullParser.END_DOCUMENT) {
-            if (parser.eventType == XmlPullParser.START_TAG) {
-                when (parser.name) {
-                    "title", "dc:title" -> title = parser.nextText()
-                    "item" -> {
-                        val id = parser.getAttributeValue(null, "id")
-                        val href = parser.getAttributeValue(null, "href")
-                        val mediaType = parser.getAttributeValue(null, "media-type")
-                        val properties = parser.getAttributeValue(null, "properties")
-                        if (id != null && href != null) {
-                            val decoded = URLDecoder.decode(href, "UTF-8")
-                            manifest[id] = canonicalizePath(opfPath, decoded)
-                            mediaTypes[id] = mediaType
-                            propertiesMap[id] = properties
-                        }
-                    }
-                    "spine" -> {
-                        val toc = parser.getAttributeValue(null, "toc")
-                        if (!toc.isNullOrEmpty()) spineTocId = toc
-                    }
-                    "itemref" -> {
-                        val idref = parser.getAttributeValue(null, "idref")
-                        if (idref != null) spineRefs.add(idref)
-                    }
-                }
+    fun readFullBook(context: Context, book: EpubBook): List<RenderNode> {
+        return useZip(context, book.uri) { zipFile ->
+            book.spine.flatMap { path ->
+                parseChapterContent(zipFile, path)
             }
         }
-
-        val spine = spineRefs.mapNotNull { manifest[it] }
-
-        // Try to locate TOC: prefer spine@toc -> NCX by media-type -> manifest item with properties 'nav'
-        var tocPath: String? = null
-        if (spineTocId != null) tocPath = manifest[spineTocId]
-        if (tocPath == null) {
-            val ncxId = mediaTypes.entries.firstOrNull { it.value == "application/x-dtbncx+xml" }?.key
-            if (ncxId != null) tocPath = manifest[ncxId]
-        }
-        if (tocPath == null) {
-            val navId = propertiesMap.entries.firstOrNull { it.value?.contains("nav") == true }?.key
-            if (navId != null) tocPath = manifest[navId]
-        }
-
-        // Build TOC map href -> title (canonicalized href => title)
-        val tocMap = if (tocPath != null) {
-            parseToc(context, uri, tocPath, opfPath)
-        } else {
-            emptyMap()
-        }
-
-        return EpubBook(uri, title, spine, manifest, tocMap)
-    }
-
-    private fun parseToc(context: Context, uri: Uri, tocPath: String, opfPath: String): Map<String, String> {
-        // scanForEntry reads the file from ZIP and parses it
-        return scanForEntry(context, uri, tocPath) { stream ->
-            val parser = Xml.newPullParser().apply {
-                setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, false)
-                setInput(stream, null)
-            }
-
-            // Decide whether it's NCX (EPUB2) or XHTML nav (EPUB3)
-            // NCX root element usually is "ncx" or has namespace with "ncx"
-            // We'll look at first start tag
-            var isNcx = false
-            // advance to first start tag
-            while (parser.next() != XmlPullParser.END_DOCUMENT) {
-                if (parser.eventType == XmlPullParser.START_TAG) {
-                    val name = parser.name.lowercase()
-                    isNcx = name == "ncx"
-                    break
-                }
-            }
-
-            val result = mutableMapOf<String, String>()
-            if (isNcx) {
-                // reset isn't available; we already consumed the start tag. It's OK — continue parsing navMap.
-                // We'll parse navPoint elements for title (navLabel/text) and content/@src
-                // We assume parser is currently at the ncx start tag (we consumed it)
-                var depth = 1
-                var currentTitle: String? = null
-                while (depth > 0 && parser.next() != XmlPullParser.END_DOCUMENT) {
-                    when (parser.eventType) {
-                        XmlPullParser.START_TAG -> {
-                            depth++
-                            val tag = parser.name.lowercase()
-                            if (tag == "navpoint") {
-                                currentTitle = null
-                            } else if (tag == "text" && currentTitle == null) {
-                                // read title
-                                currentTitle = parser.nextText().trim()
-                            } else if (tag == "content") {
-                                val src = parser.getAttributeValue(null, "src")
-                                if (!src.isNullOrEmpty()) {
-                                    val hrefClean = src.substringBefore('#')
-                                    val resolved = canonicalizePath(opfPath, URLDecoder.decode(hrefClean, "UTF-8"))
-                                    if (currentTitle != null) {
-                                        result[resolved] = currentTitle
-                                    } else {
-                                        // if title not found before content, try to find later, but store placeholder
-                                        result[resolved] = result[resolved] ?: ""
-                                    }
-                                }
-                            }
-                        }
-                        XmlPullParser.END_TAG -> depth--
-                    }
-                }
-            } else {
-                // Try EPUB3 nav XHTML parsing: find <nav ... epub:type="toc"> and then <a href="...">Text</a>
-                // We'll do a simple heuristic: set inNav when encountering <nav> and unset at its end.
-                var inNav = false
-                var depth = 0
-                // parser may have already read first start tag (not ncx), but we'll continue parsing
-                while (parser.eventType != XmlPullParser.END_DOCUMENT) {
-                    when (parser.eventType) {
-                        XmlPullParser.START_TAG -> {
-                            val tag = parser.name.lowercase()
-                            if (tag == "nav") {
-                                // check attributes or accept first nav as fallback
-                                val epubType = parser.getAttributeValue(null, "epub:type") ?: parser.getAttributeValue(null, "type")
-                                if (epubType == "toc" || epubType == "toc" || epubType.isNullOrEmpty()) {
-                                    inNav = true
-                                }
-                                depth++
-                            } else if (inNav && tag == "a") {
-                                val src = parser.getAttributeValue(null, "href")
-                                val text = parser.nextText().trim()
-                                if (!src.isNullOrEmpty()) {
-                                    val hrefClean = src.substringBefore('#')
-                                    val resolved = canonicalizePath(opfPath, URLDecoder.decode(hrefClean, "UTF-8"))
-                                    result[resolved] = text
-                                }
-                            } else {
-                                depth++
-                            }
-                        }
-                        XmlPullParser.END_TAG -> {
-                            val tag = parser.name?.lowercase()
-                            if (tag == "nav") inNav = false
-                            depth--
-                        }
-                    }
-                    if (parser.next() == XmlPullParser.END_DOCUMENT) break
-                }
-            }
-            result
-        } ?: emptyMap()
     }
 
     fun parseChapter(context: Context, book: EpubBook, path: String): List<RenderNode> {
-        return scanForEntry(context, book.uri, path) { stream ->
-            val parser = Xml.newPullParser().apply {
-                setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, false)
-                setInput(stream, null)
+        return useZip(context, book.uri) { zipFile ->
+            parseChapterContent(zipFile, path)
+        }
+    }
+
+    fun loadImage(context: Context, uri: Uri, path: String): Bitmap? {
+        return useZip(context, uri) { zipFile ->
+            useEntry(zipFile, path) { stream ->
+                BitmapFactory.decodeStream(stream)
             }
+        }
+    }
+
+    // ============================================================================================
+    // Internal Parsing Logic
+    // ============================================================================================
+
+    private data class RawOpfData(
+        val title: String,
+        val manifest: Map<String, String>, // ID -> Full Path
+        val spineRefs: List<String>,       // List of IDs
+        val tocPath: String?
+    )
+
+    private fun findOpfPath(zipFile: ZipFile): String? {
+        return useEntry(zipFile, "META-INF/container.xml") { stream ->
+            val parser = createParser(stream)
+            parser.forEachEvent {
+                if (eventType == XmlPullParser.START_TAG && name == "rootfile") {
+                    return@useEntry getAttributeValue(null, "full-path")
+                }
+            }
+            null
+        }
+    }
+
+    private fun parseOpfData(stream: InputStream, opfPath: String): RawOpfData {
+        val parser = createParser(stream)
+        
+        var title = "Unknown Title"
+        val manifest = mutableMapOf<String, String>() // ID -> Resolved Path
+        val spineRefs = mutableListOf<String>()
+        var spineTocId: String? = null
+        var ncxId: String? = null
+        var navPath: String? = null
+
+        parser.forEachEvent {
+            if (eventType == XmlPullParser.START_TAG) {
+                when (name) {
+                    "title", "dc:title" -> title = safeNextText()
+                    "item" -> {
+                        val id = getAttributeValue(null, "id")
+                        val href = getAttributeValue(null, "href")
+                        val props = getAttributeValue(null, "properties")
+                        val mediaType = getAttributeValue(null, "media-type")
+
+                        if (id != null && href != null) {
+                            val resolvedPath = resolvePath(opfPath, href)
+                            manifest[id] = resolvedPath
+
+                            // Identify TOC candidates
+                            if (props?.contains("nav") == true) {
+                                navPath = resolvedPath // EPUB 3
+                            }
+                            if (mediaType == "application/x-dtbncx+xml") {
+                                ncxId = id // EPUB 2
+                            }
+                        }
+                    }
+                    "spine" -> spineTocId = getAttributeValue(null, "toc")
+                    "itemref" -> getAttributeValue(null, "idref")?.let { spineRefs.add(it) }
+                }
+            }
+        }
+
+        // Priority: EPUB 3 Nav -> OPF Spine attribute -> NCX Item in Manifest
+        val finalTocPath = navPath ?: manifest[spineTocId] ?: manifest[ncxId]
+
+        return RawOpfData(title, manifest, spineRefs, finalTocPath)
+    }
+
+    /**
+     * Parses both EPUB 2 (NCX) and EPUB 3 (Nav) TOC formats.
+     */
+    private fun parseToc(stream: InputStream, tocPath: String, opfPath: String): Map<String, String> {
+        val parser = createParser(stream)
+        val tocMap = mutableMapOf<String, String>()
+        
+        // We detect the type based on tags inside the file
+        parser.forEachEvent {
+            if (eventType == XmlPullParser.START_TAG) {
+                when (name.lowercase()) {
+                    "navpoint" -> parseNcxNavPoint(this, tocPath, tocMap) // EPUB 2
+                    "nav" -> {
+                        // EPUB 3: Only parse the 'toc' nav, skip 'page-list' etc.
+                        val type = getAttributeValue(null, "epub:type")
+                        if (type == null || type == "toc") {
+                            parseEpub3Nav(this, tocPath, tocMap)
+                        }
+                    }
+                }
+            }
+        }
+        return tocMap
+    }
+
+    private fun parseNcxNavPoint(parser: XmlPullParser, basePath: String, result: MutableMap<String, String>) {
+        // <navLabel><text>Title</text></navLabel> <content src="path.html"/>
+        var label = ""
+        var src = ""
+
+        parser.readTagChildren("navPoint") {
+            when (name.lowercase()) {
+                "navlabel" -> {
+                    parser.readTagChildren("navLabel") {
+                        if (name.lowercase() == "text") label = safeNextText()
+                    }
+                }
+                "content" -> src = getAttributeValue(null, "src") ?: ""
+                "navpoint" -> parseNcxNavPoint(this, basePath, result) // Recursion for nested TOC
+            }
+        }
+
+        if (src.isNotEmpty() && label.isNotEmpty()) {
+            val fullPath = resolvePath(basePath, src)
+            // Store the path without anchor as key to match Spine items later
+            result[fullPath] = label
+        }
+    }
+
+    private fun parseEpub3Nav(parser: XmlPullParser, basePath: String, result: MutableMap<String, String>) {
+        // <ol> <li> <a href="path.html">Title</a> </li> </ol>
+        // We scan recursively for <a> tags inside the nav
+        val depth = parser.depth
+        while (!(parser.next() == XmlPullParser.END_TAG && parser.depth == depth)) {
+            if (parser.eventType == XmlPullParser.START_TAG && parser.name.lowercase() == "a") {
+                val href = parser.getAttributeValue(null, "href")
+                val title = parser.safeNextText() // Extracts text content of <a>
+                
+                if (!href.isNullOrEmpty() && title.isNotEmpty()) {
+                    val fullPath = resolvePath(basePath, href)
+                    result[fullPath] = title
+                }
+            }
+        }
+    }
+
+    private fun parseChapterContent(zipFile: ZipFile, path: String): List<RenderNode> {
+        return useEntry(zipFile, path) { stream ->
+            val parser = createParser(stream)
             val nodes = mutableListOf<RenderNode>()
-            while (parser.next() != XmlPullParser.END_DOCUMENT) {
-                if (parser.eventType == XmlPullParser.START_TAG) {
-                    when (parser.name.lowercase()) {
-                        "h1", "h2", "h3", "h4", "h5", "h6" -> nodes.add(RenderNode.Block(BlockType.Header, extractText(parser)))
-                        "p" -> nodes.add(RenderNode.Block(BlockType.Paragraph, extractText(parser)))
-                        // Do NOT call extractText on body/div here — let the loop enter their children
+
+            parser.forEachEvent {
+                if (eventType == XmlPullParser.START_TAG) {
+                    when (name.lowercase()) {
+                        in setOf("h1", "h2", "h3", "h4", "h5", "h6") -> 
+                            nodes.add(RenderNode.Block(BlockType.Header, extractRichText(this)))
+                        "p" -> 
+                            nodes.add(RenderNode.Block(BlockType.Paragraph, extractRichText(this)))
                         "img", "image" -> {
-                            val src = parser.getAttributeValue(null, "src")
-                                ?: parser.getAttributeValue(null, "href") // for svg image
-                            src?.let {
-                                val cleanSrc = URLDecoder.decode(it, "UTF-8")
-                                val resolved = canonicalizePath(path, cleanSrc)
-                                nodes.add(RenderNode.ImageNode(resolved))
+                            val href = getAttributeValue(null, "src") ?: getAttributeValue(null, "href")
+                            href?.let {
+                                nodes.add(RenderNode.ImageNode(resolvePath(path, it)))
                             }
                         }
                     }
@@ -237,37 +231,121 @@ object EpubParser {
         } ?: emptyList()
     }
 
-    fun loadImage(context: Context, uri: Uri, path: String): Bitmap? {
-        return scanForEntry(context, uri, path) { stream ->
-            BitmapFactory.decodeStream(stream)
-        }
-    }
+    /**
+     * Extracts text mixed with simple inline tags (like <b>, <i>, <img>).
+     * Returns a list because a paragraph might contain an ImageNode inline.
+     */
+    private fun extractRichText(parser: XmlPullParser): List<RenderNode> {
+        val nodes = mutableListOf<RenderNode>()
+        val startDepth = parser.depth
+        val sb = StringBuilder()
 
-    private fun <T> scanForEntry(context: Context, uri: Uri, targetPath: String, action: (InputStream) -> T): T? {
-        val inputStream = context.contentResolver.openInputStream(uri) ?: return null
-        ZipInputStream(inputStream).use { zipStream ->
-            var entry: ZipEntry? = zipStream.nextEntry
-            while (entry != null) {
-                if (entry.name == targetPath) {
-                    return action(zipStream)
-                }
-                zipStream.closeEntry()
-                entry = zipStream.nextEntry
-            }
-        }
-        return null
-    }
-
-    private fun extractText(parser: XmlPullParser): List<RenderNode> {
-        val result = mutableListOf<RenderNode>()
-        var depth = 1
-        while (depth > 0 && parser.next() != XmlPullParser.END_DOCUMENT) {
+        while (parser.next() != XmlPullParser.END_DOCUMENT) {
+            if (parser.eventType == XmlPullParser.END_TAG && parser.depth == startDepth) break
+            
             when (parser.eventType) {
-                XmlPullParser.START_TAG -> depth++
-                XmlPullParser.END_TAG -> depth--
-                XmlPullParser.TEXT -> if (parser.text.isNotBlank()) result.add(RenderNode.TextNode(parser.text.trim()))
+                XmlPullParser.TEXT -> sb.append(parser.text)
+                XmlPullParser.START_TAG -> {
+                    if (parser.name.lowercase() == "img") {
+                        // Flush accumulated text first
+                        if (sb.isNotBlank()) {
+                            nodes.add(RenderNode.TextNode(sb.toString().cleanWhitespace()))
+                            sb.clear()
+                        }
+                        val src = parser.getAttributeValue(null, "src")
+                        if (src != null) nodes.add(RenderNode.ImageNode(src))
+                    }
+                }
+                XmlPullParser.END_TAG -> sb.append(" ") // Add space on end tags of inline elements like </span>
             }
         }
-        return result
+        
+        if (sb.isNotBlank()) {
+            nodes.add(RenderNode.TextNode(sb.toString().cleanWhitespace()))
+        }
+        return nodes
+    }
+
+    // ============================================================================================
+    // Helpers: Path & Strings
+    // ============================================================================================
+
+    /**
+     * ELEGANT PATH RESOLUTION: Uses java.net.URI
+     * 
+     * @param baseFile The file (e.g., "OEBPS/content.opf") the relative path is inside.
+     * @param relativeUrl The link found in the file (e.g., "../Images/cover.jpg" or "chap1.html#anchor").
+     */
+    private fun resolvePath(baseFile: String, relativeUrl: String): String {
+        try {
+            // 1. Decode URL (Turn "%20" back into " ")
+            val decodedRelative = URLDecoder.decode(relativeUrl, "UTF-8")
+            
+            // 2. Remove anchors (#part1) as ZipEntry names don't have them
+            val cleanRelative = decodedRelative.substringBefore('#')
+            if (cleanRelative.isEmpty()) return baseFile // It was just an anchor to the same file
+
+            // 3. Resolve using URI
+            // We create a dummy "file:///" URI to force absolute path logic, then strip it back.
+            // This handles ".." and "." correctly.
+            val baseUri = URI.create("file:///$baseFile")
+            val resolvedUri = baseUri.resolve(cleanRelative)
+            
+            // 4. Return path without leading slash (Zip entries usually don't have / at start)
+            return resolvedUri.path.removePrefix("/")
+        } catch (e: Exception) {
+            // Fallback for malformed URIs
+            return relativeUrl.substringBefore('#')
+        }
+    }
+
+    private fun String.cleanWhitespace() = this.replace("\\s+".toRegex(), " ")
+
+    // ============================================================================================
+    // Helpers: XML & Zip
+    // ============================================================================================
+
+    private fun createParser(stream: InputStream): XmlPullParser {
+        return Xml.newPullParser().apply {
+            setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, false)
+            setInput(stream, null)
+        }
+    }
+
+    private inline fun XmlPullParser.forEachEvent(block: XmlPullParser.() -> Unit) {
+        while (next() != XmlPullParser.END_DOCUMENT) {
+            block()
+        }
+    }
+
+    private inline fun XmlPullParser.readTagChildren(tagName: String, block: XmlPullParser.() -> Unit) {
+        val depth = this.depth
+        while (!(next() == XmlPullParser.END_TAG && this.depth == depth)) {
+            if (eventType == XmlPullParser.START_TAG) {
+                block()
+            }
+        }
+    }
+
+    private fun XmlPullParser.safeNextText(): String {
+        return if (eventType == XmlPullParser.START_TAG) nextText() else ""
+    }
+
+    private fun <T> useZip(context: Context, uri: Uri, block: (ZipFile) -> T): T {
+        val pfd = context.contentResolver.openFileDescriptor(uri, "r")
+            ?: throw Exception("Cannot open URI: $uri")
+        return pfd.use {
+            // Use FileChannel for random access (much faster for Zips than streams)
+            val channel = FileInputStream(it.fileDescriptor).channel
+            ZipFile.builder()
+                .setSeekableByteChannel(channel)
+                .get()
+                .use { zip -> block(zip) }
+        }
+    }
+
+    private fun <T> useEntry(zipFile: ZipFile, path: String, action: (InputStream) -> T): T? {
+        val entry = zipFile.getEntry(path) ?: return null
+        return zipFile.getInputStream(entry).use(action)
     }
 }

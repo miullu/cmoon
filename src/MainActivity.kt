@@ -12,6 +12,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -143,29 +144,48 @@ fun EpubReaderApp() {
     }
 
     ModalNavigationDrawer(
-        drawerState = drawerState,
-        drawerContent = {
-            ModalDrawerSheet {
-                Spacer(Modifier.height(12.dp))
-                Text("cmoon", modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.titleMedium)
-                HorizontalDivider()
-                currentBook?.let { book ->
-                    LazyColumn {
-                        items(book.spine.size) { index ->
-                            val chapterHref = book.spine[index]
-                            val chapterTitle = book.toc[chapterHref] ?: "Chapter ${index + 1}"
-                            NavigationDrawerItem(
-                                label = { Text(chapterTitle) },
-                                selected = index == currentChapterIndex,
-                                onClick = { loadChapter(index) },
-                                modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    ) {
+         drawerState = drawerState,
+         drawerContent = {
+             ModalDrawerSheet {
+                 Spacer(Modifier.height(12.dp))
+                 Text("Chapters", modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.titleMedium)
+                 HorizontalDivider()
+                 
+                 currentBook?.let { book ->
+                     // Filter the spine to only include items that have a title in the TOC
+                     val menuItems = remember(book) {
+                         book.spine.mapIndexedNotNull { index, href ->
+                             val title = book.toc[href]
+                             if (title != null) {
+                                 // Return the original index in the spine and the title
+                                 index to title
+                             } else {
+                                 null
+                             }
+                         }
+                     }
+     
+                     LazyColumn {
+                         items(menuItems) { (spineIndex, chapterTitle) ->
+                             NavigationDrawerItem(
+                                 label = { 
+                                     Text(
+                                         text = chapterTitle,
+                                         maxLines = 1,
+                                         overflow = TextOverflow.Ellipsis 
+                                     ) 
+                                 },
+                                 // Selected if the current chapter matches this spine index
+                                 selected = spineIndex == currentChapterIndex,
+                                 onClick = { loadChapter(spineIndex) },
+                                 modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                             )
+                         }
+                     }
+                 }
+             }
+         }
+     ) {
         Scaffold { padding ->
             Box(
                 modifier = Modifier
@@ -237,9 +257,14 @@ fun EpubReaderApp() {
                             }
 
                             // Center: Chapter Title
+                            // Inside the Bottom Bar Layer
                             val chapterTitle = remember(currentBook, currentChapterIndex) {
-                                val chapterHref = currentBook?.spine?.getOrNull(currentChapterIndex)
-                                currentBook?.toc?.get(chapterHref) ?: "Chapter ${currentChapterIndex + 1}"
+                                val book = currentBook ?: return@remember ""
+                                val chapterHref = book.spine.getOrNull(currentChapterIndex)
+                                
+                                // Look for the title. If null, we can show "Untitled Section" 
+                                // or keep "Chapter X" just for the UI display, even if it's not in the menu.
+                                book.toc[chapterHref] ?: "Chapter ${currentChapterIndex + 1}"
                             }
 
                             Text(

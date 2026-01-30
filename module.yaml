@@ -6,10 +6,10 @@ dependencies:
   # Compose integration with Android activities
   - androidx.activity:activity-compose:1.8.2
   - androidx.appcompat:appcompat:1.7.0
+  - org.apache.commons:commons-compress:1.26.1
 
 settings:
   android:
     namespace: "com.jetbrains.sample.app"
   compose: enabled
   junit: junit-4
-
