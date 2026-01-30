@@ -45,7 +45,7 @@ fun EpubReaderApp() {
     val scope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val listState = rememberLazyListState()
-    
+
     // Application State
     var currentBook by remember { mutableStateOf<EpubBook?>(null) }
     var currentChapterIndex by remember { mutableIntStateOf(0) }
@@ -55,7 +55,7 @@ fun EpubReaderApp() {
 
     // UI State for Floating Bar
     var isBarVisible by remember { mutableStateOf(true) }
-    
+
     // Detect if we are at the end of the list
     val isAtEnd by remember {
         derivedStateOf {
@@ -86,10 +86,10 @@ fun EpubReaderApp() {
     fun loadChapter(index: Int) {
         val book = currentBook ?: return
         if (index < 0 || index >= book.spine.size) return
-        
+
         isLoading = true
         errorMessage = null
-        
+
         scope.launch(Dispatchers.IO) {
             try {
                 val path = book.spine[index]
@@ -144,8 +144,10 @@ fun EpubReaderApp() {
                 currentBook?.let { book ->
                     LazyColumn {
                         items(book.spine.size) { index ->
+                            val chapterHref = book.spine[index]
+                            val chapterTitle = book.toc[chapterHref] ?: "Chapter ${index + 1}"
                             NavigationDrawerItem(
-                                label = { Text("Chapter ${index + 1}") },
+                                label = { Text(chapterTitle) },
                                 selected = index == currentChapterIndex,
                                 onClick = { loadChapter(index) },
                                 modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
@@ -184,11 +186,11 @@ fun EpubReaderApp() {
                             contentPadding = PaddingValues(bottom = 100.dp, start = 16.dp, end = 16.dp, top = 16.dp)
                         ) {
                             item { ChapterRenderer(parsedNodes, currentBook!!.uri) }
-                            item { 
+                            item {
                                 Spacer(modifier = Modifier.height(40.dp))
-                                Text("--- End of Chapter ${currentChapterIndex + 1} ---", 
-                                    style = MaterialTheme.typography.labelSmall, 
-                                    modifier = Modifier.fillMaxWidth().wrapContentWidth(Alignment.CenterHorizontally)) 
+                                Text("--- End of Chapter ${currentChapterIndex + 1} ---",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    modifier = Modifier.fillMaxWidth().wrapContentWidth(Alignment.CenterHorizontally))
                             }
                         }
                     }

@@ -3,10 +3,11 @@ package com.jetbrains.sample.app
 import android.net.Uri
 
 data class EpubBook(
-    val uri: Uri,          // We keep the URI to re-open stream on demand
+    val uri: Uri, 
     val title: String,
-    val spine: List<String>, 
-    val manifest: Map<String, String>
+    val spine: List<String>,
+    val manifest: Map<String, String>,
+    val toc: Map<String, String> = emptyMap()
 )
 
 sealed class RenderNode {
