@@ -3,10 +3,11 @@ package com.jetbrains.sample.app
 import android.net.Uri
 
 data class EpubBook(
-    val uri: Uri, 
+    val uri: Uri,
     val title: String,
     val spine: List<String>,
     val manifest: Map<String, String>,
+    // Map from canonicalized href (as stored in spine/manifest) to human-readable title from TOC
     val toc: Map<String, String> = emptyMap()
 )
 

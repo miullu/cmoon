@@ -5,6 +5,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInVertically
@@ -26,6 +27,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -33,8 +36,15 @@ import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge() 
         super.onCreate(savedInstanceState)
-        setContent { MaterialTheme { EpubReaderApp() } }
+        setContent { 
+            MaterialTheme { 
+                Surface(color = MaterialTheme.colorScheme.background) {
+                    EpubReaderApp() 
+                }
+            } 
+        }
     }
 }
 
@@ -66,7 +76,7 @@ fun EpubReaderApp() {
         }
     }
 
-    // Floating bar visibility logic: show on scroll up OR when at end
+    // Floating bar visibility logic
     val shouldShowBar by remember {
         derivedStateOf { isBarVisible || isAtEnd || currentBook == null }
     }
@@ -74,9 +84,7 @@ fun EpubReaderApp() {
     val nestedScrollConnection = remember {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                // available.y < 0 means scrolling down
                 if (available.y < -5) isBarVisible = false
-                // available.y > 0 means scrolling up
                 if (available.y > 5) isBarVisible = true
                 return Offset.Zero
             }
@@ -98,8 +106,8 @@ fun EpubReaderApp() {
                     parsedNodes = nodes
                     currentChapterIndex = index
                     isLoading = false
-                    isBarVisible = true // Show bar when chapter changes
-                    listState.scrollToItem(0) // Reset scroll position
+                    isBarVisible = true 
+                    listState.scrollToItem(0) 
                     if (drawerState.isOpen) drawerState.close()
                 }
             } catch (e: Exception) {
@@ -139,7 +147,7 @@ fun EpubReaderApp() {
         drawerContent = {
             ModalDrawerSheet {
                 Spacer(Modifier.height(12.dp))
-                Text("Table of Contents", modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.titleMedium)
+                Text("cmoon", modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.titleMedium)
                 HorizontalDivider()
                 currentBook?.let { book ->
                     LazyColumn {
@@ -171,7 +179,7 @@ fun EpubReaderApp() {
                     errorMessage != null -> Text(errorMessage!!, color = MaterialTheme.colorScheme.error, modifier = Modifier.align(Alignment.Center))
                     currentBook == null -> {
                         Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.align(Alignment.Center)) {
-                            Text("Welcome to Amper Reader", style = MaterialTheme.typography.headlineSmall)
+                            Text("cmoon", style = MaterialTheme.typography.headlineSmall)
                             Spacer(Modifier.height(8.dp))
                             Button(onClick = { launcher.launch(arrayOf("application/epub+zip")) }) {
                                 Icon(Icons.Default.Add, null)
@@ -218,7 +226,7 @@ fun EpubReaderApp() {
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            // Left actions: Menu and Open
+                            // Left actions
                             Row {
                                 IconButton(onClick = { scope.launch { drawerState.open() } }) {
                                     Icon(Icons.Default.Menu, "Chapters")
@@ -228,10 +236,21 @@ fun EpubReaderApp() {
                                 }
                             }
 
-                            // Center: Progress
+                            // Center: Chapter Title
+                            val chapterTitle = remember(currentBook, currentChapterIndex) {
+                                val chapterHref = currentBook?.spine?.getOrNull(currentChapterIndex)
+                                currentBook?.toc?.get(chapterHref) ?: "Chapter ${currentChapterIndex + 1}"
+                            }
+
                             Text(
-                                text = "${currentChapterIndex + 1} / ${currentBook?.spine?.size ?: 0}",
-                                style = MaterialTheme.typography.labelLarge
+                                text = chapterTitle,
+                                style = MaterialTheme.typography.labelLarge,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .padding(horizontal = 8.dp)
                             )
 
                             // Right: Navigation
