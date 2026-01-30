@@ -6,9 +6,13 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.clickable
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -18,6 +22,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -36,6 +44,7 @@ fun EpubReaderApp() {
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    val listState = rememberLazyListState()
     
     // Application State
     var currentBook by remember { mutableStateOf<EpubBook?>(null) }
@@ -44,13 +53,42 @@ fun EpubReaderApp() {
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
-    // Helper to load a specific chapter index
+    // UI State for Floating Bar
+    var isBarVisible by remember { mutableStateOf(true) }
+    
+    // Detect if we are at the end of the list
+    val isAtEnd by remember {
+        derivedStateOf {
+            val layoutInfo = listState.layoutInfo
+            val totalItemsNumber = layoutInfo.totalItemsCount
+            val lastVisibleItemIndex = (layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) + 1
+            lastVisibleItemIndex >= totalItemsNumber && totalItemsNumber > 0
+        }
+    }
+
+    // Floating bar visibility logic: show on scroll up OR when at end
+    val shouldShowBar by remember {
+        derivedStateOf { isBarVisible || isAtEnd || currentBook == null }
+    }
+
+    val nestedScrollConnection = remember {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                // available.y < 0 means scrolling down
+                if (available.y < -5) isBarVisible = false
+                // available.y > 0 means scrolling up
+                if (available.y > 5) isBarVisible = true
+                return Offset.Zero
+            }
+        }
+    }
+
     fun loadChapter(index: Int) {
         val book = currentBook ?: return
         if (index < 0 || index >= book.spine.size) return
         
         isLoading = true
-        errorMessage = null // Reset errors
+        errorMessage = null
         
         scope.launch(Dispatchers.IO) {
             try {
@@ -60,11 +98,11 @@ fun EpubReaderApp() {
                     parsedNodes = nodes
                     currentChapterIndex = index
                     isLoading = false
-                    // Close drawer if open
+                    isBarVisible = true // Show bar when chapter changes
+                    listState.scrollToItem(0) // Reset scroll position
                     if (drawerState.isOpen) drawerState.close()
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
                 withContext(Dispatchers.Main) {
                     errorMessage = "Failed to load chapter: ${e.message}"
                     isLoading = false
@@ -79,20 +117,16 @@ fun EpubReaderApp() {
             errorMessage = null
             parsedNodes = emptyList()
             currentBook = null
-            
             scope.launch(Dispatchers.IO) {
                 try {
                     val book = EpubParser.openBook(context, it)
-                    if (book.spine.isEmpty()) throw Exception("Empty Spine")
-                    
                     withContext(Dispatchers.Main) {
                         currentBook = book
-                        loadChapter(0) // Load first chapter
+                        loadChapter(0)
                     }
                 } catch (e: Exception) {
-                    e.printStackTrace()
                     withContext(Dispatchers.Main) {
-                        errorMessage = "Error opening book: ${e.message}"
+                        errorMessage = "Error: ${e.message}"
                         isLoading = false
                     }
                 }
@@ -105,7 +139,7 @@ fun EpubReaderApp() {
         drawerContent = {
             ModalDrawerSheet {
                 Spacer(Modifier.height(12.dp))
-                Text("Chapters", modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.titleMedium)
+                Text("Table of Contents", modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.titleMedium)
                 HorizontalDivider()
                 currentBook?.let { book ->
                     LazyColumn {
@@ -122,66 +156,96 @@ fun EpubReaderApp() {
             }
         }
     ) {
-        Scaffold(
-            topBar = {
-                TopAppBar(
-                    title = { Text(currentBook?.title ?: "Amper Reader") },
-                    navigationIcon = {
-                        if (currentBook != null) {
-                            IconButton(onClick = { scope.launch { drawerState.open() } }) {
-                                Icon(Icons.Default.Menu, "Menu")
-                            }
-                        }
-                    },
-                    actions = {
-                        IconButton(onClick = { launcher.launch(arrayOf("application/epub+zip")) }) {
-                            Icon(Icons.Default.Add, "Open File")
-                        }
-                    }
-                )
-            },
-            bottomBar = {
-                if (currentBook != null) {
-                    BottomAppBar {
-                        IconButton(
-                            onClick = { loadChapter(currentChapterIndex - 1) },
-                            enabled = currentChapterIndex > 0
-                        ) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "Previous")
-                        }
-                        Spacer(Modifier.weight(1f))
-                        Text("Page ${currentChapterIndex + 1} / ${currentBook?.spine?.size ?: 0}")
-                        Spacer(Modifier.weight(1f))
-                        IconButton(
-                            onClick = { loadChapter(currentChapterIndex + 1) },
-                            enabled = (currentBook != null) && (currentChapterIndex < currentBook!!.spine.size - 1)
-                        ) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowForward, "Next")
-                        }
-                    }
-                }
-            }
-        ) { padding ->
-            Box(modifier = Modifier.padding(padding).fillMaxSize(), contentAlignment = Alignment.Center) {
+        Scaffold { padding ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .nestedScroll(nestedScrollConnection)
+            ) {
+                // Content Layer
                 when {
-                    isLoading -> CircularProgressIndicator()
-                    errorMessage != null -> Text(errorMessage!!, color = MaterialTheme.colorScheme.error)
-                    currentBook == null -> Text("Tap + to open an EPUB file")
-                    parsedNodes.isEmpty() -> {
-                        // Crucial for debugging: If chapter loads but is blank
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("Empty Chapter", style = MaterialTheme.typography.titleMedium)
-                            Text("(Path: ${currentBook!!.spine[currentChapterIndex]})", style = MaterialTheme.typography.bodySmall)
+                    isLoading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
+                    errorMessage != null -> Text(errorMessage!!, color = MaterialTheme.colorScheme.error, modifier = Modifier.align(Alignment.Center))
+                    currentBook == null -> {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.align(Alignment.Center)) {
+                            Text("Welcome to Amper Reader", style = MaterialTheme.typography.headlineSmall)
+                            Spacer(Modifier.height(8.dp))
+                            Button(onClick = { launcher.launch(arrayOf("application/epub+zip")) }) {
+                                Icon(Icons.Default.Add, null)
+                                Spacer(Modifier.width(8.dp))
+                                Text("Open EPUB")
+                            }
                         }
                     }
                     else -> {
-                        LazyColumn(contentPadding = PaddingValues(16.dp)) {
+                        LazyColumn(
+                            state = listState,
+                            contentPadding = PaddingValues(bottom = 100.dp, start = 16.dp, end = 16.dp, top = 16.dp)
+                        ) {
                             item { ChapterRenderer(parsedNodes, currentBook!!.uri) }
                             item { 
                                 Spacer(modifier = Modifier.height(40.dp))
-                                Text("--- End of Chapter ---", 
+                                Text("--- End of Chapter ${currentChapterIndex + 1} ---", 
                                     style = MaterialTheme.typography.labelSmall, 
                                     modifier = Modifier.fillMaxWidth().wrapContentWidth(Alignment.CenterHorizontally)) 
+                            }
+                        }
+                    }
+                }
+
+                // Floating Bottom Bar Layer
+                AnimatedVisibility(
+                    visible = shouldShowBar && currentBook != null,
+                    enter = slideInVertically(initialOffsetY = { it }),
+                    exit = slideOutVertically(targetOffsetY = { it }),
+                    modifier = Modifier.align(Alignment.BottomCenter)
+                ) {
+                    Surface(
+                        modifier = Modifier
+                            .padding(24.dp)
+                            .fillMaxWidth(),
+                        shape = RoundedCornerShape(24.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f),
+                        tonalElevation = 8.dp,
+                        shadowElevation = 6.dp
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            // Left actions: Menu and Open
+                            Row {
+                                IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                                    Icon(Icons.Default.Menu, "Chapters")
+                                }
+                                IconButton(onClick = { launcher.launch(arrayOf("application/epub+zip")) }) {
+                                    Icon(Icons.Default.Add, "Open")
+                                }
+                            }
+
+                            // Center: Progress
+                            Text(
+                                text = "${currentChapterIndex + 1} / ${currentBook?.spine?.size ?: 0}",
+                                style = MaterialTheme.typography.labelLarge
+                            )
+
+                            // Right: Navigation
+                            Row {
+                                IconButton(
+                                    onClick = { loadChapter(currentChapterIndex - 1) },
+                                    enabled = currentChapterIndex > 0
+                                ) {
+                                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Prev")
+                                }
+                                IconButton(
+                                    onClick = { loadChapter(currentChapterIndex + 1) },
+                                    enabled = currentChapterIndex < (currentBook?.spine?.size ?: 0) - 1
+                                ) {
+                                    Icon(Icons.AutoMirrored.Filled.ArrowForward, "Next")
+                                }
                             }
                         }
                     }
