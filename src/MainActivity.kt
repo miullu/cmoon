@@ -146,7 +146,7 @@ fun EpubReaderApp() {
     ModalNavigationDrawer(
          drawerState = drawerState,
          drawerContent = {
-             ModalDrawerSheet {
+             ModalDrawerSheet (modifier = Modifier.width(280.dp)) {
                  Spacer(Modifier.height(12.dp))
                  Text("Chapters", modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.titleMedium)
                  HorizontalDivider()
@@ -185,7 +185,7 @@ fun EpubReaderApp() {
                  }
              }
          }
-     ) {
+    ) {
         Scaffold { padding ->
             Box(
                 modifier = Modifier
