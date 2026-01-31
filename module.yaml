@@ -10,6 +10,6 @@ dependencies:
 
 settings:
   android:
-    namespace: "com.jetbrains.sample.app"
+    namespace: "com.jetbrains.cmoon"
   compose: enabled
   junit: junit-4

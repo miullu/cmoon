@@ -1,4 +1,4 @@
-package com.jetbrains.sample.app
+package cmoon
 
 import android.net.Uri
 import android.os.Bundle

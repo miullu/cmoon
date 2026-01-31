@@ -1,4 +1,4 @@
-package com.jetbrains.sample.app
+package cmoon
 
 import android.content.Context
 import android.graphics.Bitmap
