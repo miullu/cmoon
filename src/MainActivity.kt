@@ -144,48 +144,36 @@ fun EpubReaderApp() {
     }
 
     ModalNavigationDrawer(
-         drawerState = drawerState,
-         drawerContent = {
-             ModalDrawerSheet (modifier = Modifier.width(280.dp)) {
-                 Spacer(Modifier.height(12.dp))
-                 Text("Chapters", modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.titleMedium)
-                 HorizontalDivider()
-                 
-                 currentBook?.let { book ->
-                     // Filter the spine to only include items that have a title in the TOC
-                     val menuItems = remember(book) {
-                         book.spine.mapIndexedNotNull { index, href ->
-                             val title = book.toc[href]
-                             if (title != null) {
-                                 // Return the original index in the spine and the title
-                                 index to title
-                             } else {
-                                 null
-                             }
-                         }
-                     }
-     
-                     LazyColumn {
-                         items(menuItems) { (spineIndex, chapterTitle) ->
-                             NavigationDrawerItem(
-                                 label = { 
-                                     Text(
-                                         text = chapterTitle,
-                                         maxLines = 1,
-                                         overflow = TextOverflow.Ellipsis 
-                                     ) 
-                                 },
-                                 // Selected if the current chapter matches this spine index
-                                 selected = spineIndex == currentChapterIndex,
-                                 onClick = { loadChapter(spineIndex) },
-                                 modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
-                             )
-                         }
-                     }
-                 }
-             }
-         }
-    ) {
+          drawerState = drawerState,
+          drawerContent = {
+              ModalDrawerSheet (modifier = Modifier.width(280.dp)) {
+                  Spacer(Modifier.height(12.dp))
+                  Text("Table of Contents", modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.titleMedium)
+                  HorizontalDivider()
+                  
+                  currentBook?.let { book ->
+                      // Match TOC items to Spine indices for navigation
+                      val tocItems = remember(book) {
+                          book.toc.mapNotNull { item ->
+                              val spineIndex = book.spine.indexOf(item.href)
+                              if (spineIndex != -1) spineIndex to item.title else null
+                          }
+                      }
+      
+                      LazyColumn {
+                          items(tocItems) { (spineIndex, title) ->
+                              NavigationDrawerItem(
+                                  label = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                                  selected = spineIndex == currentChapterIndex,
+                                  onClick = { loadChapter(spineIndex) },
+                                  modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                              )
+                          }
+                      }
+                  }
+              }
+          }
+     ) {
         Scaffold { padding ->
             Box(
                 modifier = Modifier
@@ -213,7 +201,11 @@ fun EpubReaderApp() {
                             state = listState,
                             contentPadding = PaddingValues(bottom = 100.dp, start = 16.dp, end = 16.dp, top = 16.dp)
                         ) {
-                            item { ChapterRenderer(parsedNodes, currentBook!!.uri) }
+                            // NEW: Use 'items' instead of 'item'
+                            items(parsedNodes) { node ->
+                                RenderNodeItem(node, currentBook!!.uri) 
+                            }
+                        
                             item {
                                 Spacer(modifier = Modifier.height(40.dp))
                                 Text("--- End of Chapter ${currentChapterIndex + 1} ---",
@@ -259,12 +251,10 @@ fun EpubReaderApp() {
                             // Center: Chapter Title
                             // Inside the Bottom Bar Layer
                             val chapterTitle = remember(currentBook, currentChapterIndex) {
-                                val book = currentBook ?: return@remember ""
-                                val chapterHref = book.spine.getOrNull(currentChapterIndex)
-                                
-                                // Look for the title. If null, we can show "Untitled Section" 
-                                // or keep "Chapter X" just for the UI display, even if it's not in the menu.
-                                book.toc[chapterHref] ?: "Chapter ${currentChapterIndex + 1}"
+                                        val book = currentBook ?: return@remember ""
+                                        val currentHref = book.spine.getOrNull(currentChapterIndex)
+                                        // Find the TOC entry matching this spine file
+                                        book.toc.find { it.href == currentHref }?.title ?: "Chapter ${currentChapterIndex + 1}"
                             }
 
                             Text(
